@@ -111,6 +111,11 @@ the old task terminates without calling the model.
   monotonic catalog revision and token digest;
 - exports and export items: durable output jobs and their byte-level manifest
   facts;
+- integration outbox: transactionally emitted, leased projection work;
+- knowledge entities and relations: stable IDs for projects, samples,
+  experiments, methods, papers and their graph edges;
+- Obsidian links: library-scoped note identity, aggregate revision, managed
+  hash and conflict state without raw paths;
 - operation log: append-only filesystem and catalog mutations;
 - categories: stable codes and user-facing labels.
 
@@ -139,3 +144,20 @@ output checksums, then commits with a same-volume rename. Folder, ZIP64 and
 manifest-only modes share this protocol. Existing destinations are never
 overwritten; interrupted `RUNNING` jobs are requeued, and an already-renamed
 valid output is reconciled rather than rewritten.
+
+## Obsidian projection boundary
+
+Dataset insert, revision update and tombstone events enter
+`integration_outbox` in the same SQLite transaction as the catalog change.
+Claims use a bounded worker lease under `BEGIN IMMEDIATE`; only the lease owner
+may complete or reschedule an event. Obsidian being closed therefore delays a
+projection without blocking scan, review, AI or export work, and a crashed
+projector leaves an expired lease that another worker may reclaim.
+
+The schema stores only a vault identity and normalized note-relative path.
+Absolute raw, Inbox, managed-Vault and export paths are not outbox payloads and
+will not be written to Markdown. `last_managed_hash` is separate from the full
+note hash so a future projector can preserve user-authored Research notes while
+detecting edits inside the database-owned block. This foundation does not
+install Obsidian or create a real notes Vault; those mutations require the
+separately approved Phase 5 setup.
