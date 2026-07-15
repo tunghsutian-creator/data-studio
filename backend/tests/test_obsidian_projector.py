@@ -9,6 +9,7 @@ from backend.integrations.obsidian import (
     ObsidianProjector,
     ProjectionConflict,
     ProjectionSafetyError,
+    ProjectionWorker,
     claim_event,
     complete_event,
 )
@@ -155,3 +156,37 @@ def test_projection_refuses_duplicate_dataset_identity(tmp_path: Path) -> None:
         projector.project_event(event)
     assert note.read_bytes() == original_before
     assert duplicate.read_bytes() == duplicate_before
+
+
+def test_projection_worker_completes_and_reschedules_conflicts(tmp_path: Path) -> None:
+    database, _ = _database(tmp_path)
+    notes_root = tmp_path / "synthetic-notes"
+    projector = ObsidianProjector(database, notes_root, vault_id="test-vault")
+    worker = ProjectionWorker(
+        database,
+        projector,
+        worker_id="projector-worker-test",
+        lease_seconds=30,
+        base_retry_delay_seconds=0,
+    )
+    first = worker.run_once()
+    assert first is not None and first["status"] == "COMPLETED"
+    assert worker.run_once() is None
+
+    note = notes_root.joinpath(*first["projection"]["note_relpath"].split("/"))
+    note.write_text(note.read_text(encoding="utf-8").replace("file_count: 1", "file_count: 9"), encoding="utf-8")
+    updated = database.update_dataset("dataset-projector", {"sample_code": "S-conflict"})
+    assert updated is not None and updated["revision"] == 2
+    failed = worker.run_once()
+    assert failed is not None
+    assert failed["status"] == "RETRY_WAIT"
+    assert failed["error_type"] == "ProjectionConflict"
+    assert failed["attempt"] == 1
+    with database.connect() as connection:
+        event = connection.execute(
+            "SELECT attempts,last_error,processed_at FROM integration_outbox WHERE seq=?",
+            (failed["seq"],),
+        ).fetchone()
+    assert event["attempts"] == 1
+    assert "database-owned" in event["last_error"]
+    assert event["processed_at"] is None
