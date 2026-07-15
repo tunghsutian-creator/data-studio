@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ScanRequest(BaseModel):
@@ -97,3 +97,54 @@ class RuleUpdate(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=80)
     priority: int | None = None
     enabled: bool | None = None
+
+
+class CollectionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    purpose: str | None = Field(default=None, max_length=2000)
+
+
+class CollectionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    purpose: str | None = Field(default=None, max_length=2000)
+
+
+class CollectionItemsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_ids: list[str] = Field(min_length=1, max_length=10_000)
+
+
+class ExportSelectionFilter(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    search: str | None = Field(default=None, max_length=500)
+    workstream: str | None = Field(default=None, max_length=120)
+    material_state: str | None = Field(default=None, max_length=120)
+    modality: str | None = Field(default=None, max_length=80)
+    status: str | None = Field(default=None, max_length=80)
+    extension: str | None = Field(default=None, max_length=40)
+    date_from: str | None = Field(default=None, max_length=40)
+    date_to: str | None = Field(default=None, max_length=40)
+
+
+class ExportPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset_ids: list[str] = Field(default_factory=list, max_length=10_000)
+    dataset_ids: list[str] = Field(default_factory=list, max_length=10_000)
+    filter: ExportSelectionFilter | None = None
+    excluded_asset_ids: list[str] = Field(default_factory=list, max_length=10_000)
+
+    @model_validator(mode="after")
+    def exactly_one_selector(self) -> "ExportPreviewRequest":
+        selectors = int(bool(self.asset_ids)) + int(bool(self.dataset_ids)) + int(self.filter is not None)
+        if selectors != 1:
+            raise ValueError("provide exactly one of asset_ids, dataset_ids, or filter")
+        if self.excluded_asset_ids and self.filter is None:
+            raise ValueError("excluded_asset_ids may only be used with filter selection")
+        return self

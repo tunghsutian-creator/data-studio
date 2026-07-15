@@ -190,6 +190,18 @@ class Database:
             raise RuntimeError("catalog has no stable library identity")
         return value
 
+    def catalog_revision(self, connection: sqlite3.Connection | None = None) -> int:
+        if connection is not None:
+            row = connection.execute(
+                "SELECT value FROM app_metadata WHERE key='catalog_revision'"
+            ).fetchone()
+            if row:
+                return int(row[0])
+        value = self.metadata("catalog_revision")
+        if value is None:
+            raise RuntimeError("catalog has no monotonic revision")
+        return int(value)
+
     def journal_mode(self) -> str:
         with self.connect() as connection:
             return str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()

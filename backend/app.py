@@ -19,9 +19,13 @@ from .ingestion import accept_dataset, defer_dataset
 from .scanner import directory_signature, scan_source
 from .schemas import (
     AIAnalyzeRequest,
+    CollectionCreate,
+    CollectionItemsRequest,
+    CollectionUpdate,
     ConfigUpdate,
     DatasetUpdate,
     DecisionRequest,
+    ExportPreviewRequest,
     RuleCreate,
     RuleUpdate,
     ScanRequest,
@@ -559,6 +563,82 @@ def create_app(
     @app.get("/api/filters")
     def filters(request: Request) -> dict[str, Any]:
         return _database(request).filters()
+
+    @app.post("/api/collections", status_code=201)
+    def create_named_collection(payload: CollectionCreate, request: Request) -> dict[str, Any]:
+        from .exports import create_collection
+
+        return create_collection(_database(request), payload.name, payload.purpose)
+
+    @app.get("/api/collections")
+    def named_collections(request: Request) -> dict[str, Any]:
+        from .exports import list_collections
+
+        items = list_collections(_database(request))
+        return {"items": items, "total": len(items)}
+
+    @app.get("/api/collections/{collection_id}")
+    def named_collection_detail(collection_id: str, request: Request) -> dict[str, Any]:
+        from .exports import get_collection
+
+        item = get_collection(_database(request), collection_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return item
+
+    @app.patch("/api/collections/{collection_id}")
+    def patch_named_collection(
+        collection_id: str,
+        payload: CollectionUpdate,
+        request: Request,
+    ) -> dict[str, Any]:
+        from .exports import update_collection
+
+        item = update_collection(
+            _database(request),
+            collection_id,
+            payload.model_dump(exclude_unset=True),
+        )
+        if item is None:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return item
+
+    @app.post("/api/collections/{collection_id}/items")
+    def add_named_collection_items(
+        collection_id: str,
+        payload: CollectionItemsRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        from .exports import add_collection_items
+
+        item = add_collection_items(_database(request), collection_id, payload.asset_ids)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Collection not found")
+        return item
+
+    @app.delete("/api/collections/{collection_id}/items/{asset_id}")
+    def delete_named_collection_item(
+        collection_id: str,
+        asset_id: str,
+        request: Request,
+    ) -> dict[str, bool]:
+        from .exports import remove_collection_item
+
+        if not remove_collection_item(_database(request), collection_id, asset_id):
+            raise HTTPException(status_code=404, detail="Collection item not found")
+        return {"removed": True}
+
+    @app.post("/api/exports/preview")
+    def export_preview(payload: ExportPreviewRequest, request: Request) -> dict[str, Any]:
+        from .exports import SelectionChanged, preview_selection
+
+        try:
+            return preview_selection(
+                _database(request),
+                payload.model_dump(mode="json"),
+            )
+        except SelectionChanged as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/ai/health")
     def ai_health(request: Request) -> dict[str, Any]:

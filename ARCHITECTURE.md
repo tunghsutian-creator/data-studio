@@ -106,8 +106,31 @@ the old task terminates without calling the model.
 - model registry: immutable local model and inference configuration identity;
 - AI tasks: durable queue, retry budget and worker lease;
 - AI runs: append-only attempt outcomes and evidence-bearing suggestions;
+- collections: ordered, named asset UUID sets scoped to one library;
+- selection snapshots: short-lived immutable export inputs anchored to a
+  monotonic catalog revision and token digest;
+- exports and export items: durable output jobs and their byte-level manifest
+  facts;
 - operation log: append-only filesystem and catalog mutations;
 - categories: stable codes and user-facing labels.
 
 `original_path` is immutable. Paths and names are not identifiers; UUIDs and
 SHA-256 provide stable identity and integrity.
+
+## Export selection boundary
+
+Dataset checkboxes are only a UI convenience. Export preview expands dataset
+IDs or normalized filters on the server into exact asset IDs and stores that
+ordered snapshot. SQLite triggers monotonically advance `catalog_revision` for
+every dataset or asset insert, update or delete. Preview reads one revision,
+verifies the selected files without holding a write lock, and persists the
+token only if the revision is still unchanged.
+
+Files are resolved only from portable root keys. A verified managed copy is
+preferred; reference sources remain read-only. Preview streams SHA-256 and
+reports blocking integrity issues without returning any relative or absolute
+path. The raw random token is returned once and only its SHA-256 is stored.
+Selection rows deliberately retain their ID and hash facts even if the live
+catalog later changes, so they do not hold dataset or asset deletion hostage.
+Writing bundles is a separate worker step and must revalidate the token,
+catalog facts and bytes before any atomic export commit.

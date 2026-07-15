@@ -19,6 +19,8 @@ All endpoints are served from `http://127.0.0.1:8765/api`.
   attempt history. Optional filters are `dataset_id`, `status` and `limit`.
 - `GET /datasets/{id}/ai` - the latest AI tasks, suggestions, evidence and model
   versions for one dataset.
+- `GET /collections` / `GET /collections/{id}` - named, library-scoped asset
+  snapshots. Responses contain asset UUIDs and display metadata, never paths.
 
 ## Mutation endpoints
 
@@ -30,6 +32,12 @@ All endpoints are served from `http://127.0.0.1:8765/api`.
 - `POST /datasets/{id}/ai/analyze` to enqueue a manual, idempotent local AI
   suggestion. The body accepts `reason`, `priority` and `max_attempts`; it never
   accepts a path or model endpoint.
+- `POST /collections`, `PATCH /collections/{id}`,
+  `POST /collections/{id}/items` and
+  `DELETE /collections/{id}/items/{asset_id}` manage ordered asset UUIDs.
+- `POST /exports/preview` expands exactly one of explicit `asset_ids`, explicit
+  `dataset_ids`, or a normalized server-side filter into an immutable selection
+  snapshot. Filter selections may include `excluded_asset_ids`.
 
 The API never accepts an arbitrary filesystem path from the browser. Source
 roots are resolved from the local configuration allowlist.
@@ -69,6 +77,21 @@ low-confidence or pixel-bearing `REVIEW` datasets. The threshold is
 skipped for partial/error scans and never applies to reference or already
 accepted datasets. Re-scanning unchanged input does not repeat a successful run
 for the same registered model; manual **重新分析** remains an explicit new run.
+
+## Export preview contract
+
+Preview resolves the selection at one monotonic catalog revision, prefers a
+verified managed copy, then rechecks existence, size and SHA-256 through the
+configured root map. Missing, stale, unresolved or hash-mismatched assets make
+the preview non-exportable. Duplicate hashes and filename collisions are
+warnings; every explicitly selected asset remains present.
+
+The response contains a random 15-minute `selection_token`, the catalog and
+selection digests, counts, issue codes, and a path-free asset summary. Only the
+token SHA-256 is stored in SQLite. If dataset or asset facts change while files
+are being verified, preview returns HTTP 409 and persists no snapshot. A later
+export must recheck every byte before consuming the token; this endpoint does
+not write an export.
 
 ## Dataset row shape
 
