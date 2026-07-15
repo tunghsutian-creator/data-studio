@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$DataRoot = "C:\research data",
+    [ValidateSet("HuggingFace", "ModelScope")]
+    [string]$ModelSource = "HuggingFace",
     [switch]$Download,
     [switch]$VerifyOnly
 )
@@ -52,16 +54,38 @@ function Receive-Artifact([string]$Url, [string]$Destination, [int64]$ExpectedBy
     $parent = Split-Path -Parent $Destination
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     $partial = "$Destination.partial"
-    Write-Host "Downloading $Url"
-    & $curl.Source --location --fail --retry 5 --retry-all-errors --retry-delay 5 --continue-at - --output $partial $Url
-    if ($LASTEXITCODE -ne 0) {
-        throw "Download failed: $Url"
+    $downloadLockPath = "$Destination.download.lock"
+    try {
+        $downloadLock = [System.IO.File]::Open(
+            $downloadLockPath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+    } catch [System.IO.IOException] {
+        throw "Another process is already downloading this artifact: $Destination"
     }
-    if (-not (Test-Artifact $partial $ExpectedBytes $ExpectedSha256)) {
-        throw "Downloaded artifact did not pass verification: $partial"
+    try {
+        # A second process may have completed the artifact while this process
+        # waited to acquire the exclusive file handle.
+        if (Test-Artifact $Destination $ExpectedBytes $ExpectedSha256) {
+            Write-Host "Verified existing artifact: $Destination"
+            return
+        }
+        Write-Host "Downloading $Url"
+        & $curl.Source --location --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 --continue-at - --output $partial $Url
+        if ($LASTEXITCODE -ne 0) {
+            throw "Download failed: $Url"
+        }
+        if (-not (Test-Artifact $partial $ExpectedBytes $ExpectedSha256)) {
+            throw "Downloaded artifact did not pass verification: $partial"
+        }
+        Move-Item -LiteralPath $partial -Destination $Destination
+        Write-Host "Downloaded and verified: $Destination"
+    } finally {
+        $downloadLock.Dispose()
+        Remove-Item -LiteralPath $downloadLockPath -Force -ErrorAction SilentlyContinue
     }
-    Move-Item -LiteralPath $partial -Destination $Destination
-    Write-Host "Downloaded and verified: $Destination"
 }
 
 $modelRoot = Join-Path $resolvedDataRoot ("models\qwen3-vl-8b-instruct\" + $lock.model.revision)
@@ -80,8 +104,16 @@ if ($Download -and $drive.AvailableFreeSpace -lt ($plannedBytes + 2GB)) {
     throw "Insufficient free disk space for verified downloads and extraction."
 }
 
-$modelUrl = "https://huggingface.co/$($lock.model.repository)/resolve/$($lock.model.revision)/$($lock.model.filename)?download=true"
-$projectorUrl = "https://huggingface.co/$($lock.vision_projector.repository)/resolve/$($lock.vision_projector.revision)/$($lock.vision_projector.filename)?download=true"
+if ($ModelSource -eq "ModelScope") {
+    # ModelScope mirrors the official Qwen repository under its rolling master
+    # revision. Exact byte counts and SHA-256 hashes from the lock remain the
+    # authority, so a mirror can never silently change the pinned artifacts.
+    $modelUrl = "https://modelscope.cn/models/$($lock.model.repository)/resolve/master/$($lock.model.filename)"
+    $projectorUrl = "https://modelscope.cn/models/$($lock.vision_projector.repository)/resolve/master/$($lock.vision_projector.filename)"
+} else {
+    $modelUrl = "https://huggingface.co/$($lock.model.repository)/resolve/$($lock.model.revision)/$($lock.model.filename)?download=true"
+    $projectorUrl = "https://huggingface.co/$($lock.vision_projector.repository)/resolve/$($lock.vision_projector.revision)/$($lock.vision_projector.filename)?download=true"
+}
 $modelPath = Join-Path $modelRoot $lock.model.filename
 $projectorPath = Join-Path $modelRoot $lock.vision_projector.filename
 Receive-Artifact $modelUrl $modelPath ([int64]$lock.model.bytes) $lock.model.sha256
@@ -144,6 +176,7 @@ if ($Download -and -not (Test-Path -LiteralPath $serverPath -PathType Leaf)) {
 
 $summary = [ordered]@{
     profile_id = $lock.profile_id
+    model_source = $ModelSource
     planned_bytes = $plannedBytes
     data_root = $resolvedDataRoot
     model_path = $modelPath

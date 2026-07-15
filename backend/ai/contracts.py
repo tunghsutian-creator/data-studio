@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..taxonomy import Modality
 
 
-AI_OUTPUT_SCHEMA_VERSION = "1.0"
-PROMPT_VERSION = "phase1-feasibility-v1"
+AI_OUTPUT_SCHEMA_VERSION = "1.2"
+PROMPT_VERSION = "phase1-feasibility-v3"
 
 
 class Evidence(BaseModel):
@@ -24,7 +24,7 @@ class Evidence(BaseModel):
         "instrument_metadata",
         "abstention",
     ]
-    value: str = Field(min_length=1, max_length=600)
+    value: str = Field(min_length=1, max_length=240)
 
 
 class AIClassification(BaseModel):
@@ -38,7 +38,7 @@ class AIClassification(BaseModel):
     conditions: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     proposed_name: str | None = Field(default=None, max_length=240)
     confidence: float = Field(ge=0, le=1)
-    evidence: list[Evidence] = Field(default_factory=list, max_length=20)
+    evidence: list[Evidence] = Field(min_length=1, max_length=3)
     needs_review: bool
     abstain_reason: str | None = Field(default=None, max_length=600)
 
@@ -68,6 +68,21 @@ def parse_classification_response(content: str) -> AIClassification:
 def output_json_schema() -> dict[str, Any]:
     schema = AIClassification.model_json_schema()
     schema["$id"] = f"academic-vault://ai-output/{AI_OUTPUT_SCHEMA_VERSION}"
+    schema["allOf"] = [
+        {
+            "if": {
+                "properties": {"modality": {"const": Modality.UNKNOWN.value}},
+                "required": ["modality"],
+            },
+            "then": {
+                "properties": {
+                    "needs_review": {"const": True},
+                    "abstain_reason": {"type": "string", "minLength": 1, "maxLength": 600},
+                },
+                "required": ["needs_review", "abstain_reason"],
+            },
+        }
+    ]
     return schema
 
 

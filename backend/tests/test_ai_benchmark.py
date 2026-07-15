@@ -13,7 +13,7 @@ from backend.ai.benchmark import (
     assert_report_path_is_outside_repository,
     run_benchmark,
 )
-from backend.ai.contracts import AIClassification, parse_classification_response
+from backend.ai.contracts import AIClassification, output_json_schema, parse_classification_response
 from backend.ai.model_lock import load_model_lock
 
 
@@ -64,9 +64,17 @@ def test_strict_response_contract_rejects_extra_fields_and_unsupported_unknown()
     with pytest.raises(ValueError):
         AIClassification.model_validate({**valid_payload(), "unexpected": "field"})
     unknown = valid_payload("UNKNOWN")
-    unknown["evidence"] = []
+    unknown["evidence"] = [{"kind": "abstention", "value": "bounded evidence is insufficient"}]
     with pytest.raises(ValueError, match="abstain_reason"):
         AIClassification.model_validate(unknown)
+
+    schema = output_json_schema()
+    assert "evidence" in schema["required"]
+    assert schema["properties"]["evidence"]["minItems"] == 1
+    assert schema["properties"]["evidence"]["maxItems"] == 3
+    unknown_then = schema["allOf"][0]["then"]
+    assert unknown_then["properties"]["needs_review"]["const"] is True
+    assert unknown_then["properties"]["abstain_reason"]["minLength"] == 1
 
 
 def test_profile_requires_loopback_and_read_only_sources(tmp_path: Path) -> None:

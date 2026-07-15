@@ -58,8 +58,8 @@
     ]
   },
   "contracts": {
-    "prompt_version": "phase1-feasibility-v1",
+    "prompt_version": "phase1-feasibility-v3",
     "taxonomy_version": "builtin-v1",
-    "output_schema_version": "1.0"
+    "output_schema_version": "1.2"
   }
 }

@@ -288,23 +288,19 @@ def build_evidence_pack(
             continue
         if row.get("managed_root_key") and row.get("managed_relpath") and row.get("managed_sha256"):
             path = mapper.resolve(row["managed_root_key"], row["managed_relpath"], must_exist=True)
-            source_kind = "managed"
         elif row.get("managed_path") and row.get("managed_sha256"):
             location = mapper.relativize(
                 row["managed_path"], allowed_keys={"vault"}, must_exist=True
             )
             path = mapper.resolve(location.root_key, location.relative_path, must_exist=True)
-            source_kind = "managed"
         elif row.get("original_root_key") and row.get("original_relpath"):
             path = mapper.resolve(row["original_root_key"], row["original_relpath"], must_exist=True)
-            source_kind = "reference"
         else:
             allowed_key = str(row.get("source_kind") or "reference").lower()
             location = mapper.relativize(
                 row["original_path"], allowed_keys={allowed_key}, must_exist=True
             )
             path = mapper.resolve(location.root_key, location.relative_path, must_exist=True)
-            source_kind = allowed_key
         if not path.is_file() or path.stat().st_size != int(row["size_bytes"]):
             raise ValueError(f"asset changed before benchmark: {row['id']}")
 
@@ -314,7 +310,6 @@ def build_evidence_pack(
             "extension": extension,
             "size_bytes": int(row["size_bytes"]),
             "mime_type": row.get("mime_type"),
-            "source_kind": source_kind,
         }
         if extension in TEXT_EXTENSIONS and text_count < profile.max_text_assets:
             preview = _text_preview(path, profile.max_text_bytes)
@@ -346,8 +341,10 @@ def _system_prompt() -> str:
     return (
         "You classify local scientific research datasets. Deterministic parsers and rules have already run. "
         "Use only the supplied bounded evidence; never infer from missing filenames or directory names. "
-        f"modality must be one of: {modalities}. Use UNKNOWN and explain abstain_reason when evidence is insufficient. "
-        "Use UNASSIGNED for an unknown workstream. Cite concrete evidence. Return only the requested JSON object."
+        f"modality must be one of: {modalities}. When evidence is insufficient, use UNKNOWN, set needs_review "
+        "to true, and provide a non-empty abstain_reason. "
+        "Use UNASSIGNED for an unknown workstream. evidence must contain one to three concise concrete items; "
+        "for UNKNOWN use evidence kind abstention. Return only the requested JSON object."
     )
 
 
@@ -412,8 +409,27 @@ class LlamaCppClient:
             raw = payload["choices"][0]["message"]["content"]
             if isinstance(raw, list):
                 raw = "".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in raw)
-            parsed = parse_classification_response(str(raw))
-            return InferenceResult(parsed, int((time.perf_counter() - started) * 1000), str(raw), None)
+            raw_text = str(raw)
+            try:
+                parsed = parse_classification_response(raw_text)
+            except Exception as exc:
+                return InferenceResult(
+                    None,
+                    int((time.perf_counter() - started) * 1000),
+                    raw_text,
+                    str(exc),
+                )
+            return InferenceResult(parsed, int((time.perf_counter() - started) * 1000), raw_text, None)
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text.strip().replace("\x00", "")
+            if len(detail) > 2000:
+                detail = detail[:2000] + "..."
+            return InferenceResult(
+                None,
+                int((time.perf_counter() - started) * 1000),
+                "",
+                f"HTTP {exc.response.status_code}: {detail}",
+            )
         except Exception as exc:
             return InferenceResult(None, int((time.perf_counter() - started) * 1000), "", str(exc))
 
@@ -501,6 +517,7 @@ def run_benchmark(
                     "match": predicted == pack.dataset.expected_modality,
                     "latency_ms": inference.latency_ms,
                     "error": inference.error,
+                    "error_output_excerpt": inference.raw_content[:2000] if inference.error else None,
                     "output": inference.classification.model_dump(mode="json") if inference.classification else None,
                 }
             )
@@ -510,7 +527,7 @@ def run_benchmark(
     known = [item for item in valid if item["expected_modality"] != Modality.UNKNOWN.value]
     latencies = [int(item["latency_ms"]) for item in primary]
     return {
-        "report_schema_version": 1,
+        "report_schema_version": 2,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "profile_id": profile.profile_id,
         "contracts": {
