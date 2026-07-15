@@ -1,6 +1,13 @@
 """Local-only AI contracts, providers, and feasibility tooling."""
 
 from .contracts import AIClassification, Evidence
+from .evidence import (
+    EvidenceBuildError,
+    EvidenceBuilder,
+    EvidenceIntegrityError,
+    EvidencePackage,
+    EvidencePathError,
+)
 from .model_lock import WindowsModelLock, load_model_lock
 from .provider import (
     AnalysisRequest,
@@ -17,11 +24,18 @@ from .provider import (
     ProviderTimeout,
     ProviderUnavailable,
 )
+from .worker import AIWorker, WorkerOutcome, load_locked_llama_provider
 
 __all__ = [
     "AIClassification",
     "AnalysisRequest",
+    "AIWorker",
     "Evidence",
+    "EvidenceBuildError",
+    "EvidenceBuilder",
+    "EvidenceIntegrityError",
+    "EvidencePackage",
+    "EvidencePathError",
     "FakeLocalModelProvider",
     "LlamaCppProvider",
     "LocalModelProfile",
@@ -35,5 +49,7 @@ __all__ = [
     "ProviderTimeout",
     "ProviderUnavailable",
     "WindowsModelLock",
+    "WorkerOutcome",
+    "load_locked_llama_provider",
     "load_model_lock",
 ]

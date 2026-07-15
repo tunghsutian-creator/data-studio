@@ -59,6 +59,16 @@ prevents a replaced worker from overwriting a newer result. Unknown model
 outputs are persisted as `ABSTAINED`; AI output never changes dataset metadata
 or grants filesystem authority directly.
 
+Before enqueue and again before inference, the evidence builder resolves every
+asset through its configured portable root, rejects symlinks and path-review
+state, verifies size and SHA-256, and checks preview sources again after they
+are read. The model receives only a bounded manifest summary, content previews
+marked as untrusted data, and in-memory image data URLs. Filenames, relative
+directories and absolute paths are deliberately omitted. A manifest digest
+keeps arbitrarily large asset sets fingerprinted without putting the full list
+into the model context. If bytes or catalog assessment change after enqueue,
+the old task terminates without calling the model.
+
 ## Canonical taxonomy
 
 - workstream: `REFERENCE`, `PA_ADR_RECYCLE`, `D_PA`, `UDC`, `UNKNOWN`
