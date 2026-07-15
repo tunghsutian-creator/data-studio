@@ -247,6 +247,70 @@ def test_ai_api_is_explicitly_disabled_in_rules_only_mode(tmp_path: Path) -> Non
         assert "disabled" in rejected.json()["detail"].lower()
 
 
+def test_inbox_scan_automatically_queues_only_a_suggestion(tmp_path: Path) -> None:
+    settings = replace(
+        api_settings(tmp_path),
+        ai_enabled=True,
+        ai_worker_poll_seconds=0.1,
+    )
+    settings.inbox_root.mkdir(parents=True)
+    (settings.inbox_root / "ambiguous.txt").write_text(
+        "ambiguous local measurement\n",
+        encoding="utf-8",
+    )
+    providers: list[FakeLocalModelProvider] = []
+    application = create_app(
+        settings,
+        ai_worker_factory=fake_ai_worker_factory(providers),
+    )
+
+    with TestClient(application) as client:
+        scan = client.post("/api/scan", json={"source": "inbox"})
+        assert scan.status_code == 202
+        assert client.get(f"/api/jobs/{scan.json()['id']}").json()["status"] == "COMPLETED"
+        dataset = client.get("/api/datasets").json()["items"][0]
+        assert dataset["status"] == "REVIEW"
+        assert dataset["modality"] == "UNKNOWN"
+
+        task = None
+        for _ in range(100):
+            items = client.get("/api/ai/tasks", params={"dataset_id": dataset["id"]}).json()["items"]
+            if items:
+                task = items[0]
+                if task["status"] in {"COMPLETED", "ABSTAINED", "FAILED"}:
+                    break
+            time.sleep(0.01)
+        assert task is not None
+        assert task["reason"].startswith("AUTO_INBOX:")
+        assert "UNKNOWN" in task["reason"]
+        assert task["priority"] == 25
+
+        unchanged = client.get(f"/api/datasets/{dataset['id']}").json()
+        assert unchanged["status"] == "REVIEW"
+        assert unchanged["modality"] == "UNKNOWN"
+
+        repeated_scan = client.post("/api/scan", json={"source": "inbox"})
+        assert repeated_scan.status_code == 202
+        repeated_tasks = client.get(
+            "/api/ai/tasks", params={"dataset_id": dataset["id"]}
+        ).json()["items"]
+        assert len(repeated_tasks) == 1
+
+
+def test_reference_scan_never_automatically_queues_ai(tmp_path: Path) -> None:
+    settings = replace(api_settings(tmp_path), ai_enabled=True, ai_worker_poll_seconds=0.1)
+    settings.reference_root.mkdir(parents=True)
+    (settings.reference_root / "ambiguous.txt").write_text("unknown\n", encoding="utf-8")
+    providers: list[FakeLocalModelProvider] = []
+
+    with TestClient(
+        create_app(settings, ai_worker_factory=fake_ai_worker_factory(providers))
+    ) as client:
+        scan = client.post("/api/scan", json={"source": "reference"})
+        assert scan.status_code == 202
+        assert client.get("/api/ai/tasks").json()["items"] == []
+
+
 def test_ai_service_can_be_enabled_and_disabled_through_config(tmp_path: Path) -> None:
     settings = replace(api_settings(tmp_path), config_file=tmp_path / "config.json")
     providers: list[FakeLocalModelProvider] = []
@@ -258,9 +322,18 @@ def test_ai_service_can_be_enabled_and_disabled_through_config(tmp_path: Path) -
     with TestClient(application) as client:
         assert client.get("/api/ai/health").json()["status"] == "disabled"
 
-        enabled = client.put("/api/config", json={"aiEnabled": True})
+        enabled = client.put(
+            "/api/config",
+            json={
+                "aiEnabled": True,
+                "aiAutoInboxEnabled": False,
+                "aiTriggerConfidenceThreshold": 0.65,
+            },
+        )
         assert enabled.status_code == 200
         assert enabled.json()["ai_enabled"] is True
+        assert enabled.json()["ai_auto_inbox_enabled"] is False
+        assert enabled.json()["ai_trigger_confidence_threshold"] == 0.65
         health = client.get("/api/ai/health").json()
         assert health["enabled"] is True
         assert health["worker_running"] is True

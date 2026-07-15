@@ -44,6 +44,8 @@ class ConfigUpdate(BaseModel):
     ai_provider_timeout_seconds: float | None = None
     ai_lease_seconds: int | None = None
     ai_base_retry_delay_seconds: int | None = None
+    ai_auto_inbox_enabled: bool | None = None
+    ai_trigger_confidence_threshold: float | None = None
     export_root: str | None = None
     backup_root: str | None = None
     auto_scan_seconds: float | None = None
@@ -68,6 +70,8 @@ class ConfigUpdate(BaseModel):
     aiEnabled: bool | None = None
     aiProfilePath: str | None = None
     aiModelLockPath: str | None = None
+    aiAutoInboxEnabled: bool | None = None
+    aiTriggerConfidenceThreshold: float | None = None
     confidenceThreshold: float | None = None
 
 

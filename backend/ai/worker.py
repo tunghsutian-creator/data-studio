@@ -201,6 +201,7 @@ class AIWorker:
         reason: str,
         priority: int = 100,
         max_attempts: int = 2,
+        reuse_completed: bool = False,
     ) -> dict[str, Any]:
         package = self.evidence_builder.build(dataset_id)
         return self.database.enqueue_ai_task(
@@ -209,6 +210,9 @@ class AIWorker:
             reason=reason,
             priority=priority,
             max_attempts=max_attempts,
+            reuse_completed_model_id=(
+                str(self.registered_model["id"]) if reuse_completed else None
+            ),
         )
 
     def _retry_delay(self, attempt_count: int) -> int:

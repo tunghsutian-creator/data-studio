@@ -244,7 +244,14 @@ def scan_source(
     if job_id:
         database.update_job(job_id, status="RUNNING", message=f"Scanning {source}")
     if not root.exists():
-        result = {"source": source, "root": str(root), "scanned": 0, "skipped": 0, "errors": 0}
+        result = {
+            "source": source,
+            "root": str(root),
+            "scanned": 0,
+            "skipped": 0,
+            "errors": 0,
+            "dataset_ids": [],
+        }
         if job_id:
             database.update_job(job_id, status="COMPLETED", total=0, current=0, message="Source root does not exist")
         return result
@@ -252,6 +259,7 @@ def scan_source(
     files = list(_iter_files(root, settings, source))
     total = len(files)
     scanned = skipped = errors = 0
+    dataset_ids: set[str] = set()
     stable_ns = int(settings.stable_file_seconds * 1_000_000_000)
     sibling_cache: dict[Path, list[str]] = {}
     user_rules = database.list_rules()
@@ -272,7 +280,7 @@ def scan_source(
                 # catalog metadata and never become modality-model features.
                 result = enrich_workstream_context(path, root, ruled)
                 key = group_key(path, root, result)
-                database.upsert_scanned_file(
+                dataset_id = database.upsert_scanned_file(
                     source_kind=source,
                     source_root=str(root),
                     group_key=key,
@@ -286,6 +294,7 @@ def scan_source(
                     role=str((result.get("metadata") or {}).get("lifecycle") or "PRIMARY").upper(),
                     mime_type=mimetypes.guess_type(path.name)[0],
                 )
+                dataset_ids.add(dataset_id)
                 scanned += 1
             except (OSError, ValueError, UnicodeError):
                 errors += 1
@@ -300,6 +309,7 @@ def scan_source(
             "skipped": skipped,
             "errors": errors,
             "cancelled": True,
+            "dataset_ids": sorted(dataset_ids),
         }
         if job_id:
             database.update_job(
@@ -315,7 +325,14 @@ def scan_source(
             database.update_job(job_id, status="FAILED", error=str(exc), current=scanned + skipped + errors, total=total)
         raise
 
-    output = {"source": source, "root": str(root), "scanned": scanned, "skipped": skipped, "errors": errors}
+    output = {
+        "source": source,
+        "root": str(root),
+        "scanned": scanned,
+        "skipped": skipped,
+        "errors": errors,
+        "dataset_ids": sorted(dataset_ids),
+    }
     if job_id:
         database.update_job(job_id, status="COMPLETED", current=total, total=total, message=f"Indexed {scanned}; skipped {skipped}; errors {errors}")
     return output

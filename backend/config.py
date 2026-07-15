@@ -43,6 +43,8 @@ class Settings:
     ai_provider_timeout_seconds: float = 120.0
     ai_lease_seconds: int = 180
     ai_base_retry_delay_seconds: int = 5
+    ai_auto_inbox_enabled: bool = True
+    ai_trigger_confidence_threshold: float = 0.8
     export_root: Path | None = None
     backup_root: Path | None = None
     auto_scan_seconds: float = 30
@@ -73,6 +75,8 @@ class Settings:
             raise ValueError("ai_lease_seconds must be between 5 and 3600")
         if not 0 <= self.ai_base_retry_delay_seconds <= 3600:
             raise ValueError("ai_base_retry_delay_seconds must be between 0 and 3600")
+        if isinstance(self.ai_trigger_confidence_threshold, bool) or not 0 <= self.ai_trigger_confidence_threshold <= 1:
+            raise ValueError("ai_trigger_confidence_threshold must be between 0 and 1")
         if Path(self.ai_profile_path).resolve(strict=False) == Path(self.ai_model_lock_path).resolve(strict=False):
             raise ValueError("ai_profile_path and ai_model_lock_path must be different files")
         if self.ai_enabled:
@@ -178,6 +182,8 @@ class Settings:
                 "aiEnabled": self.ai_enabled,
                 "aiProfilePath": str(self.ai_profile_path),
                 "aiModelLockPath": str(self.ai_model_lock_path),
+                "aiAutoInboxEnabled": self.ai_auto_inbox_enabled,
+                "aiTriggerConfidenceThreshold": self.ai_trigger_confidence_threshold,
                 "autoAcceptEnabled": False,
                 "reviewPolicy": "manual",
             }

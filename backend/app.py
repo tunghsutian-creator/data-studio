@@ -206,6 +206,102 @@ def _wake_auto_scan(app: FastAPI) -> None:
         loop.call_soon_threadsafe(wakeup.set)
 
 
+def _enqueue_auto_ai_candidates(
+    app: FastAPI,
+    settings_snapshot: Settings,
+    database_snapshot: Database,
+    source: str,
+    scan_result: dict[str, Any],
+) -> dict[str, Any]:
+    summary = {"eligible": 0, "created": 0, "reused": 0, "failed": 0}
+    if source != "inbox" or not settings_snapshot.ai_auto_inbox_enabled:
+        return summary
+    if scan_result.get("cancelled") or scan_result.get("errors") or scan_result.get("skipped"):
+        return summary
+    dataset_ids = sorted({str(value) for value in scan_result.get("dataset_ids") or () if value})
+    if not dataset_ids:
+        return summary
+
+    from .ai.evidence import EvidenceBuildError
+    from .ai.triggers import evaluate_inbox_ai_trigger
+
+    with app.state.config_lock:
+        if (
+            app.state.settings is not settings_snapshot
+            or app.state.database is not database_snapshot
+        ):
+            return summary
+        service = getattr(app.state, "ai_service", None)
+        if service is None or not service.running:
+            return summary
+        wake_needed = False
+        for dataset_id in dataset_ids:
+            dataset = database_snapshot.get_dataset(dataset_id)
+            if dataset is None:
+                continue
+            decision = evaluate_inbox_ai_trigger(
+                dataset,
+                confidence_threshold=settings_snapshot.ai_trigger_confidence_threshold,
+            )
+            if not decision.eligible or decision.reason is None:
+                continue
+            summary["eligible"] += 1
+            try:
+                task = service.worker.enqueue(
+                    dataset_id,
+                    reason=decision.reason,
+                    priority=decision.priority,
+                    max_attempts=2,
+                    reuse_completed=True,
+                )
+            except EvidenceBuildError as exc:
+                summary["failed"] += 1
+                logger.warning(
+                    "Automatic local AI trigger skipped dataset %s (%s)",
+                    dataset_id,
+                    exc.code,
+                )
+            except Exception:
+                summary["failed"] += 1
+                logger.exception(
+                    "Automatic local AI trigger failed for dataset %s",
+                    dataset_id,
+                )
+            else:
+                key = "created" if task.get("created") else "reused"
+                summary[key] += 1
+                if task.get("created") or task.get("status") in {"QUEUED", "RUNNING", "RETRY_WAIT"}:
+                    wake_needed = True
+        if wake_needed:
+            service.wake()
+    return summary
+
+
+def _scan_source_with_ai(
+    app: FastAPI,
+    settings_snapshot: Settings,
+    database_snapshot: Database,
+    source: str,
+    job_id: str | None = None,
+    cancel_event: threading.Event | None = None,
+) -> dict[str, Any]:
+    result = scan_source(
+        settings_snapshot,
+        database_snapshot,
+        source,
+        job_id,
+        cancel_event,
+    )
+    result["ai_trigger"] = _enqueue_auto_ai_candidates(
+        app,
+        settings_snapshot,
+        database_snapshot,
+        source,
+        result,
+    )
+    return result
+
+
 async def _auto_scan_loop(app: FastAPI) -> None:
     last_identity: tuple[str, str] | None = None
     last_signature: str | None = None
@@ -255,7 +351,8 @@ async def _auto_scan_loop(app: FastAPI) -> None:
             if job:
                 try:
                     result = await asyncio.to_thread(
-                        scan_source,
+                        _scan_source_with_ai,
+                        app,
                         settings_snapshot,
                         database_snapshot,
                         "inbox",
@@ -390,6 +487,8 @@ def create_app(
                 "aiEnabled": "ai_enabled",
                 "aiProfilePath": "ai_profile_path",
                 "aiModelLockPath": "ai_model_lock_path",
+                "aiAutoInboxEnabled": "ai_auto_inbox_enabled",
+                "aiTriggerConfidenceThreshold": "ai_trigger_confidence_threshold",
             }.items():
                 if ui_name in raw:
                     raw[setting_name] = raw[ui_name]
@@ -607,7 +706,14 @@ def create_app(
             db = _database(request)
             settings_snapshot = _settings(request)
             job = db.create_job("SCAN", payload.source)
-        background_tasks.add_task(scan_source, settings_snapshot, db, payload.source, job["id"])
+        background_tasks.add_task(
+            _scan_source_with_ai,
+            request.app,
+            settings_snapshot,
+            db,
+            payload.source,
+            job["id"],
+        )
         return job
 
     @app.get("/api/jobs")

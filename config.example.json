@@ -14,6 +14,8 @@
   "ai_provider_timeout_seconds": 120,
   "ai_lease_seconds": 180,
   "ai_base_retry_delay_seconds": 5,
+  "ai_auto_inbox_enabled": true,
+  "ai_trigger_confidence_threshold": 0.8,
   "export_root": "C:\\Research Data\\exports",
   "backup_root": "C:\\Research Data\\backups",
   "auto_scan_seconds": 30,

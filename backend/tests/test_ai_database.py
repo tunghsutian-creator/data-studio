@@ -162,6 +162,15 @@ def test_active_task_deduplication_priority_and_successful_run(tmp_path: Path) -
     )
     assert repeated_completion["id"] == run["id"]
 
+    automatic_reuse = database.enqueue_ai_task(
+        dataset_id,
+        "b" * 64,
+        reason="AUTO_INBOX:UNCHANGED",
+        reuse_completed_model_id=str(model["id"]),
+    )
+    assert automatic_reuse["created"] is False
+    assert automatic_reuse["id"] == high["id"]
+
     requeued = database.enqueue_ai_task(
         dataset_id, "b" * 64, reason="MODEL_VERSION_CHANGED"
     )
@@ -189,6 +198,40 @@ def test_unknown_result_becomes_explicit_abstention(tmp_path: Path) -> None:
 
     assert result["status"] == "ABSTAINED"
     assert database.get_ai_task(task["id"])["status"] == "ABSTAINED"
+
+
+def test_automatic_completed_reuse_is_scoped_to_registered_model(tmp_path: Path) -> None:
+    database, dataset_id = _database_with_dataset(tmp_path)
+    first_model = _register(database)
+    task = database.enqueue_ai_task(dataset_id, "f" * 64, reason="AUTO_INBOX:UNKNOWN")
+    claimed = database.claim_next_ai_task("worker-a")
+    assert claimed is not None
+    run = database.start_ai_run(
+        task["id"],
+        str(first_model["id"]),
+        "worker-a",
+        request_fingerprint="f" * 64,
+    )
+    database.complete_ai_run(
+        run["id"],
+        "worker-a",
+        classification=_classification(),
+        response_sha256="9" * 64,
+        latency_ms=10,
+    )
+
+    changed_identity = _identity()
+    changed_identity["runtime_commit"] = "new-runtime-commit"
+    second_model = database.register_model(changed_identity, config={"temperature": 0.0})
+    fresh = database.enqueue_ai_task(
+        dataset_id,
+        "f" * 64,
+        reason="AUTO_INBOX:MODEL_CHANGED",
+        reuse_completed_model_id=str(second_model["id"]),
+    )
+
+    assert fresh["created"] is True
+    assert fresh["id"] != task["id"]
 
 
 def test_retry_exhaustion_and_error_redaction_are_persistent(tmp_path: Path) -> None:

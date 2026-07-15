@@ -49,6 +49,16 @@ rules and manual review paths remain available when the provider is disabled or
 offline. Browser health/task endpoints expose allowlisted fields only; worker
 lease ownership and local model/source paths remain internal.
 
+After a fully stable, error-free Inbox scan, a separate conservative trigger
+policy may enqueue AI for `REVIEW` datasets that are unknown, below the explicit
+confidence threshold, in rule conflict, or contain pixel evidence. Reference
+datasets and accepted/protected states are never auto-triggered. Scheduling
+uses a lower priority than a user request, and an unchanged input is reused only
+when the same registered model/config already produced a successful or abstained
+run. Model upgrades therefore remain eligible for a fresh suggestion. Trigger
+failure cannot fail the completed scan, and the resulting suggestion still has
+no authority to update metadata or files.
+
 ## Durable AI state
 
 Local AI work uses three catalog tables. `model_registry` is an immutable

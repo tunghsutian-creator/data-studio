@@ -351,6 +351,7 @@ class Database:
         reason: str,
         priority: int = 100,
         max_attempts: int = 2,
+        reuse_completed_model_id: str | None = None,
     ) -> dict[str, Any]:
         fingerprint = _require_sha256(input_fingerprint, "input_fingerprint")
         reason_text = _bounded_text(reason, "reason", 200)
@@ -358,6 +359,11 @@ class Database:
             raise ValueError("priority must be an integer between -1000 and 1000")
         if isinstance(max_attempts, bool) or not isinstance(max_attempts, int) or not 1 <= max_attempts <= 10:
             raise ValueError("max_attempts must be an integer between 1 and 10")
+        reuse_model = (
+            _bounded_text(reuse_completed_model_id, "reuse_completed_model_id", 64)
+            if reuse_completed_model_id is not None
+            else None
+        )
         now = utc_now()
         created = False
         with self.transaction() as connection:
@@ -372,6 +378,21 @@ class Database:
                 """,
                 (dataset_id, fingerprint),
             ).fetchone()
+            if row is None and reuse_model is not None:
+                row = connection.execute(
+                    """
+                    SELECT t.* FROM ai_tasks t
+                    WHERE t.dataset_id=? AND t.input_fingerprint=?
+                      AND t.status IN ('COMPLETED','ABSTAINED')
+                      AND EXISTS(
+                          SELECT 1 FROM ai_runs r
+                          WHERE r.task_id=t.id AND r.model_registry_id=?
+                            AND r.status IN ('SUCCEEDED','ABSTAINED')
+                      )
+                    ORDER BY t.finished_at DESC,t.created_at DESC,t.id DESC LIMIT 1
+                    """,
+                    (dataset_id, fingerprint, reuse_model),
+                ).fetchone()
             if row is None:
                 task_id = str(uuid.uuid4())
                 connection.execute(

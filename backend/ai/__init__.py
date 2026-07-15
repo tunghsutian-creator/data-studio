@@ -25,12 +25,14 @@ from .provider import (
     ProviderUnavailable,
 )
 from .worker import AIWorker, AIWorkerService, WorkerOutcome, load_locked_llama_provider
+from .triggers import AITriggerDecision, evaluate_inbox_ai_trigger
 
 __all__ = [
     "AIClassification",
     "AnalysisRequest",
     "AIWorker",
     "AIWorkerService",
+    "AITriggerDecision",
     "Evidence",
     "EvidenceBuildError",
     "EvidenceBuilder",
@@ -53,4 +55,5 @@ __all__ = [
     "WorkerOutcome",
     "load_locked_llama_provider",
     "load_model_lock",
+    "evaluate_inbox_ai_trigger",
 ]

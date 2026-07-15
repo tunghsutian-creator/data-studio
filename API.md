@@ -62,6 +62,14 @@ The worker transitions the task through `QUEUED`, `RUNNING`, optional
 Repeated requests with the same dataset and evidence fingerprint reuse the
 active task instead of starting concurrent inference.
 
+When `ai_enabled` and `ai_auto_inbox_enabled` are both true, a completed Inbox
+scan may also enqueue a lower-priority task for unknown, conflicting,
+low-confidence or pixel-bearing `REVIEW` datasets. The threshold is
+`ai_trigger_confidence_threshold` (default `0.8`). Automatic scheduling is
+skipped for partial/error scans and never applies to reference or already
+accepted datasets. Re-scanning unchanged input does not repeat a successful run
+for the same registered model; manual **重新分析** remains an explicit new run.
+
 ## Dataset row shape
 
 ```json
