@@ -20,6 +20,7 @@ config.json
 /backups/
 /quarantine/
 /academic-notes/
+/benchmark-results/
 *.sqlite
 *.sqlite-*
 *.sqlite3

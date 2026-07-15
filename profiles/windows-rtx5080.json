@@ -1,0 +1,32 @@
+{
+  "profile_schema_version": 1,
+  "profile_id": "windows-rtx5080-qwen3vl-q8",
+  "provider": "llama.cpp",
+  "model_id": "Qwen3-VL-8B-Instruct",
+  "quantization": "Q8_0",
+  "device": "CUDA",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8877,
+    "context_tokens": 8192,
+    "max_output_tokens": 512,
+    "temperature": 0,
+    "seed": 42,
+    "parallel_requests": 1,
+    "flash_attention": true
+  },
+  "evidence": {
+    "max_text_bytes_per_asset": 65536,
+    "max_text_assets": 3,
+    "max_images": 2,
+    "max_image_edge": 1536,
+    "max_image_bytes": 4194304,
+    "image_format": "PNG"
+  },
+  "safety": {
+    "loopback_only": true,
+    "read_only_sources": true,
+    "allow_file_actions": false,
+    "auto_accept": false
+  }
+}

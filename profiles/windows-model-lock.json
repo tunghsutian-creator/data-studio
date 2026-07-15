@@ -1,0 +1,65 @@
+{
+  "lock_schema_version": 1,
+  "profile_id": "windows-rtx5080-qwen3vl-q8",
+  "model": {
+    "repository": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    "revision": "f982a07559d4a2f6c8744d840bf6fccab30eea96",
+    "license": "apache-2.0",
+    "filename": "Qwen3VL-8B-Instruct-Q8_0.gguf",
+    "bytes": 8709519456,
+    "sha256": "0d264b3941185d00a74f75c4245521dae088ff1efc90ab8d1754e83f5844adb0"
+  },
+  "vision_projector": {
+    "repository": "Qwen/Qwen3-VL-8B-Instruct-GGUF",
+    "revision": "f982a07559d4a2f6c8744d840bf6fccab30eea96",
+    "license": "apache-2.0",
+    "filename": "mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+    "bytes": 752289728,
+    "sha256": "c6ba85508d82f42590e6eb77d5340369ab6fecf107a7561d809523d8aa5f3bfd"
+  },
+  "runtime": {
+    "repository": "https://github.com/ggml-org/llama.cpp",
+    "commit": "12127defda4f41b7679cb2477a4b0d65ee6a0c8f",
+    "release": "b10015",
+    "build": "official Windows x64 CUDA 12.4 binaries",
+    "artifacts": [
+      {
+        "filename": "llama-b10015-bin-win-cuda-12.4-x64.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10015/llama-b10015-bin-win-cuda-12.4-x64.zip",
+        "bytes": 248837340,
+        "sha256": "336104b92b9b6a53a39eb7a373003d6256c1f20af3fc8213f65c2c3c11716469"
+      },
+      {
+        "filename": "cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b10015/cudart-llama-bin-win-cuda-12.4-x64.zip",
+        "bytes": 391443627,
+        "sha256": "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6"
+      }
+    ],
+    "launch_arguments": [
+      "--model",
+      "{MODEL_DIR}/Qwen3VL-8B-Instruct-Q8_0.gguf",
+      "--mmproj",
+      "{MODEL_DIR}/mmproj-Qwen3VL-8B-Instruct-Q8_0.gguf",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8877",
+      "--ctx-size",
+      "8192",
+      "--parallel",
+      "1",
+      "--n-gpu-layers",
+      "99",
+      "--flash-attn",
+      "on",
+      "--jinja",
+      "--no-webui"
+    ]
+  },
+  "contracts": {
+    "prompt_version": "phase1-feasibility-v1",
+    "taxonomy_version": "builtin-v1",
+    "output_schema_version": "1.0"
+  }
+}

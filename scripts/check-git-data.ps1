@@ -16,7 +16,8 @@ if (-not $repo) {
 
 $forbiddenPrefixes = @(
     "data/", "data ref/", "inbox/", "vault/", "catalog/", "models/",
-    "runtimes/", "exports/", "backups/", "quarantine/", "academic-notes/"
+    "runtimes/", "exports/", "backups/", "quarantine/", "academic-notes/",
+    "benchmark-results/"
 )
 $forbiddenExtensions = @(
     ".sqlite", ".sqlite3", ".db", ".gguf", ".safetensors", ".joblib",

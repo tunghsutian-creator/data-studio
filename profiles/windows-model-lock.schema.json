@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "academic-vault://windows-model-lock/1",
+  "title": "Academic Vault Windows Model Lock",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "lock_schema_version",
+    "profile_id",
+    "model",
+    "vision_projector",
+    "runtime",
+    "contracts"
+  ],
+  "properties": {
+    "lock_schema_version": { "const": 1 },
+    "profile_id": { "type": "string", "minLength": 1 },
+    "model": { "$ref": "#/$defs/artifact" },
+    "vision_projector": { "$ref": "#/$defs/artifact" },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "commit", "build", "artifacts", "launch_arguments"],
+      "properties": {
+        "repository": { "type": "string", "format": "uri" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "release": { "type": ["string", "null"] },
+        "build": { "type": "string", "minLength": 1 },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/runtimeArtifact" }
+        },
+        "launch_arguments": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt_version", "taxonomy_version", "output_schema_version"],
+      "properties": {
+        "prompt_version": { "type": "string", "minLength": 1 },
+        "taxonomy_version": { "type": "string", "minLength": 1 },
+        "output_schema_version": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision", "license", "filename", "bytes", "sha256"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "license": { "type": "string", "minLength": 1 },
+        "filename": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "runtimeArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["filename", "url", "bytes", "sha256"],
+      "properties": {
+        "filename": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "bytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}
