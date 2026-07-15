@@ -1,0 +1,15 @@
+{
+  "host": "127.0.0.1",
+  "port": 8765,
+  "reference_root": "C:\\Research Data\\data ref",
+  "inbox_root": "C:\\Research Data\\inbox",
+  "vault_root": "C:\\Research Data\\vault",
+  "quarantine_root": "C:\\Research Data\\quarantine",
+  "catalog_path": "C:\\Research Data\\catalog\\academic_vault.sqlite3",
+  "model_path": "C:\\Research Data\\models\\modality-classifier.joblib",
+  "auto_scan_seconds": 30,
+  "stable_file_seconds": 5,
+  "auto_accept_threshold": 0.98,
+  "copy_on_accept": true
+}
+
