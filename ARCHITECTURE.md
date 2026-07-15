@@ -132,5 +132,10 @@ reports blocking integrity issues without returning any relative or absolute
 path. The raw random token is returned once and only its SHA-256 is stored.
 Selection rows deliberately retain their ID and hash facts even if the live
 catalog later changes, so they do not hold dataset or asset deletion hostage.
-Writing bundles is a separate worker step and must revalidate the token,
-catalog facts and bytes before any atomic export commit.
+Writing bundles is a separate durable, single-concurrency worker step. It
+revalidates selected catalog facts and source bytes, writes only beneath the
+configured export root, verifies the versioned JSON/CSV manifests and all
+output checksums, then commits with a same-volume rename. Folder, ZIP64 and
+manifest-only modes share this protocol. Existing destinations are never
+overwritten; interrupted `RUNNING` jobs are requeued, and an already-renamed
+valid output is reconciled rather than rewritten.

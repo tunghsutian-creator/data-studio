@@ -25,6 +25,7 @@ from .schemas import (
     ConfigUpdate,
     DatasetUpdate,
     DecisionRequest,
+    ExportCreateRequest,
     ExportPreviewRequest,
     RuleCreate,
     RuleUpdate,
@@ -91,6 +92,12 @@ def _ai_service_for(
 
     worker = (worker_factory or _default_ai_worker)(settings, database)
     return AIWorkerService(worker, poll_seconds=settings.ai_worker_poll_seconds)
+
+
+def _export_service_for(database: Database):
+    from .exports import ExportWorker, ExportWorkerService
+
+    return ExportWorkerService(ExportWorker(database))
 
 
 def _public_registered_model(item: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -389,6 +396,9 @@ def create_app(
         database.initialize()
         database.recover_interrupted_jobs()
         database.recover_ai_tasks()
+        from .exports import recover_interrupted_exports
+
+        recover_interrupted_exports(database)
         application.state.monitor_loop = asyncio.get_running_loop()
         application.state.monitor_wakeup = asyncio.Event()
         application.state.monitor_cancel = threading.Event()
@@ -399,6 +409,9 @@ def create_app(
             application.state.ai_service = ai_service
             if ai_service:
                 ai_service.start()
+            export_service = _export_service_for(database)
+            application.state.export_service = export_service
+            export_service.start()
             monitor_task = asyncio.create_task(
                 _auto_scan_loop(application),
                 name="academic-vault-inbox-monitor",
@@ -409,6 +422,9 @@ def create_app(
             ai_service = getattr(application.state, "ai_service", None)
             if ai_service and not ai_service.stop(timeout_seconds=5.0):
                 logger.warning("Local AI worker is still finishing an in-flight request during shutdown")
+            export_service = getattr(application.state, "export_service", None)
+            if export_service and not export_service.stop(timeout_seconds=5.0):
+                logger.warning("Export worker is still finishing an in-flight job during shutdown")
             application.state.monitor_cancel.set()
             application.state.monitor_wakeup.set()
             if monitor_task:
@@ -431,6 +447,7 @@ def create_app(
     app.state.settings = configured
     app.state.database = database
     app.state.ai_service = None
+    app.state.export_service = None
     app.state.config_lock = threading.RLock()
     app.add_middleware(
         CORSMiddleware,
@@ -453,6 +470,9 @@ def create_app(
     def health(request: Request) -> dict[str, Any]:
         db = _database(request)
         ai_service = getattr(request.app.state, "ai_service", None)
+        export_service = getattr(request.app.state, "export_service", None)
+        from .exports import export_counts
+
         return {
             "status": "ok",
             "service": "academic-vault",
@@ -464,6 +484,8 @@ def create_app(
             "model_loaded": bool(getattr(request.app.state, "model_loaded", False)),
             "ai_enabled": ai_service is not None,
             "ai_worker_running": bool(ai_service and ai_service.running),
+            "export_worker_running": bool(export_service and export_service.running),
+            "export_queue": export_counts(db),
         }
 
     @app.get("/api/config")
@@ -475,10 +497,16 @@ def create_app(
         with request.app.state.config_lock:
             previous = _settings(request)
             current_database = _database(request)
-            if current_database.active_job_count() or current_database.active_ai_task_count():
+            from .exports import active_export_count, recover_interrupted_exports
+
+            if (
+                current_database.active_job_count()
+                or current_database.active_ai_task_count()
+                or active_export_count(current_database)
+            ):
                 raise HTTPException(
                     status_code=409,
-                    detail="Wait for active scan/accept/AI jobs before changing configuration",
+                    detail="Wait for active scan/accept/AI/export jobs before changing configuration",
                 )
             raw = payload.model_dump(exclude_none=True)
             for ui_name, setting_name in {
@@ -524,23 +552,40 @@ def create_app(
             replacement.initialize()
             replacement.recover_interrupted_jobs()
             replacement.recover_ai_tasks()
+            recover_interrupted_exports(replacement)
             from . import classifier
 
             previous_model_bundle = classifier._MODEL_BUNDLE
             replacement_service = None
+            replacement_export_service = None
             try:
                 replacement_service = _ai_service_for(updated, replacement, ai_worker_factory)
+                replacement_export_service = _export_service_for(replacement)
                 model_loaded = _configure_local_model(updated)
                 updated.save()
             except Exception:
                 if replacement_service:
                     replacement_service.stop(timeout_seconds=0)
+                if replacement_export_service:
+                    replacement_export_service.stop(timeout_seconds=0)
                 classifier._MODEL_BUNDLE = previous_model_bundle
                 raise
+            previous_export_service = getattr(request.app.state, "export_service", None)
+            if previous_export_service and not previous_export_service.stop(timeout_seconds=5.0):
+                if replacement_service:
+                    replacement_service.stop(timeout_seconds=0)
+                classifier._MODEL_BUNDLE = previous_model_bundle
+                previous.save()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Export worker is still stopping; configuration was not changed",
+                )
             previous_service = getattr(request.app.state, "ai_service", None)
             if previous_service and not previous_service.stop(timeout_seconds=5.0):
                 if replacement_service:
                     replacement_service.stop(timeout_seconds=0)
+                if previous_export_service:
+                    previous_export_service.start()
                 classifier._MODEL_BUNDLE = previous_model_bundle
                 previous.save()
                 raise HTTPException(
@@ -550,9 +595,12 @@ def create_app(
             request.app.state.settings = updated
             request.app.state.database = replacement
             request.app.state.ai_service = replacement_service
+            request.app.state.export_service = replacement_export_service
             request.app.state.model_loaded = model_loaded
             if replacement_service:
                 replacement_service.start()
+            if replacement_export_service:
+                replacement_export_service.start()
             _wake_auto_scan(request.app)
             return updated.public_dict()
 
@@ -639,6 +687,55 @@ def create_app(
             )
         except SelectionChanged as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/exports", status_code=202)
+    def start_export(payload: ExportCreateRequest, request: Request) -> dict[str, Any]:
+        from .exports import ExportFailure, create_export
+
+        try:
+            item = create_export(
+                _database(request),
+                payload.model_dump(mode="json"),
+            )
+        except ExportFailure as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        service = getattr(request.app.state, "export_service", None)
+        if service:
+            service.wake()
+        return item
+
+    @app.get("/api/exports")
+    def exports(request: Request, limit: int = Query(100, ge=1, le=500)) -> dict[str, Any]:
+        from .exports import list_exports
+
+        items = list_exports(_database(request), limit=limit)
+        return {"items": items, "total": len(items)}
+
+    @app.get("/api/exports/{export_id}")
+    def export_detail(export_id: str, request: Request) -> dict[str, Any]:
+        from .exports import get_export
+
+        item = get_export(_database(request), export_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Export not found")
+        return item
+
+    @app.get("/api/exports/{export_id}/manifest")
+    def export_manifest(export_id: str, request: Request) -> dict[str, Any]:
+        from .exports import ExportFailure, load_export_manifest
+
+        try:
+            return load_export_manifest(_database(request), export_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Export not found") from None
+        except ExportFailure as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
 
     @app.get("/api/ai/health")
     def ai_health(request: Request) -> dict[str, Any]:

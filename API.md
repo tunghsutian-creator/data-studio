@@ -21,6 +21,10 @@ All endpoints are served from `http://127.0.0.1:8765/api`.
   versions for one dataset.
 - `GET /collections` / `GET /collections/{id}` - named, library-scoped asset
   snapshots. Responses contain asset UUIDs and display metadata, never paths.
+- `GET /exports` / `GET /exports/{id}` - durable queue state, selected item
+  facts and the verified local output location.
+- `GET /exports/{id}/manifest` - the authoritative manifest, returned only
+  after all recorded checksums are reverified.
 
 ## Mutation endpoints
 
@@ -38,6 +42,10 @@ All endpoints are served from `http://127.0.0.1:8765/api`.
 - `POST /exports/preview` expands exactly one of explicit `asset_ids`, explicit
   `dataset_ids`, or a normalized server-side filter into an immutable selection
   snapshot. Filter selections may include `excluded_asset_ids`.
+- `POST /exports` consumes one unexpired, exportable `selection_token`. The body
+  also supplies `name`, optional `purpose`/`collection_id`, `export_mode`
+  (`FOLDER`, `ZIP64`, or `MANIFEST_ONLY`) and `duplicate_policy` (`PRESERVE` or
+  `DEDUPLICATE`). It returns a durable `QUEUED` job with HTTP 202.
 
 The API never accepts an arbitrary filesystem path from the browser. Source
 roots are resolved from the local configuration allowlist.
@@ -92,6 +100,14 @@ token SHA-256 is stored in SQLite. If dataset or asset facts change while files
 are being verified, preview returns HTTP 409 and persists no snapshot. A later
 export must recheck every byte before consuming the token; this endpoint does
 not write an export.
+
+The single-concurrency export worker rechecks the selected catalog facts and
+source SHA-256 before writing, verifies source stability after writing, and
+verifies every output listed in `checksums.sha256`. Folder and manifest-only
+outputs are committed by same-volume directory rename; ZIP uses ZIP64 and a
+same-volume file rename. Existing destinations are never overwritten. A
+process restart requeues `RUNNING` jobs and can reconcile an already-renamed,
+fully verified output without rewriting it.
 
 ## Dataset row shape
 

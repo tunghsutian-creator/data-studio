@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
+import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -10,7 +14,16 @@ from fastapi.testclient import TestClient
 from backend.app import create_app
 from backend.config import Settings
 from backend.database import Database
-from backend.exports import SelectionChanged, preview_selection
+from backend.exports import (
+    ExportFailure,
+    ExportWorker,
+    create_export,
+    load_export_manifest,
+    preview_selection,
+    recover_interrupted_exports,
+    SelectionChanged,
+)
+from backend.exports.manifest import render_manifest_csv
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -285,3 +298,299 @@ def test_preview_blocks_unreadable_source(
 
     assert preview["ready"] is False
     assert preview["items"][0]["issue_codes"] == ["UNREADABLE"]
+
+
+def test_folder_export_deduplicates_bytes_but_preserves_every_manifest_item(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    source_a = b"same scientific bytes"
+    _, first = _add_asset(database, settings, "a/shared.dat", source_a, group_key="a")
+    _, second = _add_asset(database, settings, "b/shared.dat", source_a, group_key="b")
+    preview = preview_selection(database, {"asset_ids": [first, second]})
+    created = create_export(
+        database,
+        {
+            "selection_token": preview["selection_token"],
+            "name": "Paper A / Figure 3",
+            "purpose": "Verified inputs",
+            "export_mode": "FOLDER",
+            "duplicate_policy": "DEDUPLICATE",
+        },
+    )
+
+    completed = ExportWorker(database).process_next()
+
+    assert created["status"] == "QUEUED"
+    assert completed["status"] == "COMPLETED"
+    archive = Path(completed["archive_path"])
+    assert archive.is_dir()
+    physical_files = list((archive / "files").iterdir())
+    assert len(physical_files) == 1
+    assert physical_files[0].read_bytes() == source_a
+    manifest = load_export_manifest(database, completed["id"])
+    assert len(manifest["items"]) == 2
+    assert manifest["items"][0]["duplicate_of"] is None
+    assert manifest["items"][1]["duplicate_of"] == first
+    assert manifest["items"][0]["exported_relpath"] == manifest["items"][1]["exported_relpath"]
+    assert hashlib.sha256((archive / "manifest.json").read_bytes()).hexdigest() == completed["manifest_sha256"]
+    checksums = (archive / "checksums.sha256").read_text(encoding="utf-8")
+    assert checksums.count("files/") == 1
+    assert (settings.reference_root / "a/shared.dat").read_bytes() == source_a
+    with pytest.raises(ExportFailure, match="already been consumed"):
+        create_export(
+            database,
+            {
+                "selection_token": preview["selection_token"],
+                "name": "reused",
+                "export_mode": "FOLDER",
+                "duplicate_policy": "PRESERVE",
+            },
+        )
+
+
+def test_zip64_and_manifest_only_modes_are_verified(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    _, asset_id = _add_asset(
+        database,
+        settings,
+        "zip/input.dat",
+        b"zip payload",
+        group_key="zip",
+    )
+
+    zip_preview = preview_selection(database, {"asset_ids": [asset_id]})
+    zip_job = create_export(
+        database,
+        {
+            "selection_token": zip_preview["selection_token"],
+            "name": "Portable package",
+            "export_mode": "ZIP64",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+    zip_result = ExportWorker(database).process_next()
+    assert zip_result["id"] == zip_job["id"]
+    assert zip_result["status"] == "COMPLETED"
+    archive = Path(zip_result["archive_path"])
+    assert archive.suffix == ".zip"
+    with zipfile.ZipFile(archive, "r", allowZip64=True) as bundle:
+        names = bundle.namelist()
+        assert "manifest.json" in names
+        assert "checksums.sha256" in names
+        assert len([name for name in names if name.startswith("files/")]) == 1
+    assert load_export_manifest(database, zip_job["id"])["export_mode"] == "ZIP64"
+
+    manifest_preview = preview_selection(database, {"asset_ids": [asset_id]})
+    manifest_job = create_export(
+        database,
+        {
+            "selection_token": manifest_preview["selection_token"],
+            "name": "Manifest only",
+            "export_mode": "MANIFEST_ONLY",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+    manifest_result = ExportWorker(database).process_next()
+    assert manifest_result["id"] == manifest_job["id"]
+    assert manifest_result["status"] == "COMPLETED"
+    manifest_root = Path(manifest_result["archive_path"])
+    assert not (manifest_root / "files").exists()
+    manifest = load_export_manifest(database, manifest_job["id"])
+    assert manifest["items"][0]["exported_relpath"] is None
+    assert manifest["items"][0]["exported_sha256"] == manifest["items"][0]["source_sha256"]
+
+
+def test_export_fails_closed_when_source_changes_after_preview(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    _, asset_id = _add_asset(
+        database,
+        settings,
+        "changed.dat",
+        b"before",
+        group_key="changed",
+    )
+    preview = preview_selection(database, {"asset_ids": [asset_id]})
+    job = create_export(
+        database,
+        {
+            "selection_token": preview["selection_token"],
+            "name": "Must fail",
+            "export_mode": "FOLDER",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+    (settings.reference_root / "changed.dat").write_bytes(b"AFTER!")
+
+    failed = ExportWorker(database).process_next()
+
+    assert failed["id"] == job["id"]
+    assert failed["status"] == "FAILED"
+    assert failed["error_code"] == "SOURCE_HASH_MISMATCH"
+    assert failed["archive_path"] is None
+    assert list(settings.export_root.glob("Must-fail--*")) == []
+
+
+def test_recovery_reconciles_an_existing_verified_atomic_output(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    _, asset_id = _add_asset(database, settings, "recover.dat", b"recover", group_key="recover")
+    preview = preview_selection(database, {"asset_ids": [asset_id]})
+    job = create_export(
+        database,
+        {
+            "selection_token": preview["selection_token"],
+            "name": "Recoverable",
+            "export_mode": "FOLDER",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+    completed = ExportWorker(database).process_next()
+    archive = Path(completed["archive_path"])
+    before_manifest = (archive / "manifest.json").read_bytes()
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE exports SET status='RUNNING',finished_at=NULL WHERE id=?",
+            (job["id"],),
+        )
+
+    assert recover_interrupted_exports(database) == 1
+    recovered = ExportWorker(database).process_next()
+
+    assert recovered["status"] == "COMPLETED"
+    assert (archive / "manifest.json").read_bytes() == before_manifest
+    assert len(list(settings.export_root.glob("Recoverable--*"))) == 1
+
+
+def test_manifest_contains_exactly_eighteen_selected_assets(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    asset_ids: list[str] = []
+    for index in range(18):
+        _, asset_id = _add_asset(
+            database,
+            settings,
+            f"eighteen/{index:02d}.dat",
+            f"payload-{index}".encode(),
+            group_key=f"eighteen-{index}",
+        )
+        asset_ids.append(asset_id)
+    preview = preview_selection(database, {"asset_ids": asset_ids})
+    job = create_export(
+        database,
+        {
+            "selection_token": preview["selection_token"],
+            "name": "Exact eighteen",
+            "export_mode": "MANIFEST_ONLY",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+
+    completed = ExportWorker(database).process_next()
+    manifest = load_export_manifest(database, job["id"])
+
+    assert completed["status"] == "COMPLETED"
+    assert len(manifest["items"]) == 18
+    assert [item["asset_id"] for item in manifest["items"]] == asset_ids
+
+
+def test_export_api_wakes_durable_worker_and_returns_verified_manifest(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    _, asset_id = _add_asset(database, settings, "api.dat", b"api", group_key="api")
+
+    with TestClient(create_app(settings)) as client:
+        preview = client.post("/api/exports/preview", json={"asset_ids": [asset_id]}).json()
+        response = client.post(
+            "/api/exports",
+            json={
+                "selection_token": preview["selection_token"],
+                "name": "API export",
+                "export_mode": "FOLDER",
+                "duplicate_policy": "PRESERVE",
+            },
+        )
+        assert response.status_code == 202
+        export_id = response.json()["id"]
+        detail = None
+        for _ in range(200):
+            detail = client.get(f"/api/exports/{export_id}").json()
+            if detail["status"] in {"COMPLETED", "FAILED"}:
+                break
+            time.sleep(0.01)
+        assert detail is not None
+        assert detail["status"] == "COMPLETED"
+        manifest = client.get(f"/api/exports/{export_id}/manifest")
+        assert manifest.status_code == 200
+        assert manifest.json()["items"][0]["asset_id"] == asset_id
+
+
+def test_export_never_overwrites_preexisting_destination(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    _, asset_id = _add_asset(database, settings, "collision.dat", b"safe", group_key="collision")
+    preview = preview_selection(database, {"asset_ids": [asset_id]})
+    job = create_export(
+        database,
+        {
+            "selection_token": preview["selection_token"],
+            "name": "Collision",
+            "export_mode": "FOLDER",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+    destination = settings.export_root / f"Collision--{job['id'].replace('-', '')[:8]}"
+    destination.mkdir()
+    marker = destination / "user-owned.txt"
+    marker.write_bytes(b"do not overwrite")
+
+    failed = ExportWorker(database).process_next()
+
+    assert failed["status"] == "FAILED"
+    assert failed["error_code"] == "OUTPUT_EXISTS"
+    assert marker.read_bytes() == b"do not overwrite"
+
+
+def test_human_csv_projection_neutralizes_spreadsheet_formulas() -> None:
+    payload = render_manifest_csv(
+        [
+            {
+                "position": 0,
+                "dataset_id": "dataset",
+                "asset_id": "asset",
+                "original_name": "=1+1.dat",
+                "exported_relpath": None,
+                "source_kind": "reference",
+                "source_sha256": "a" * 64,
+                "exported_sha256": "a" * 64,
+                "size_bytes": 1,
+                "duplicate_of": None,
+            }
+        ]
+    )
+    row = next(csv.DictReader(io.StringIO(payload.decode("utf-8"))))
+
+    assert row["original_name"] == "'=1+1.dat"
+
+
+def test_completed_bundle_detects_post_export_tampering(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    database = _database(settings)
+    _, asset_id = _add_asset(database, settings, "tamper.dat", b"trusted", group_key="tamper")
+    preview = preview_selection(database, {"asset_ids": [asset_id]})
+    job = create_export(
+        database,
+        {
+            "selection_token": preview["selection_token"],
+            "name": "Tamper check",
+            "export_mode": "FOLDER",
+            "duplicate_policy": "PRESERVE",
+        },
+    )
+    completed = ExportWorker(database).process_next()
+    exported_file = next((Path(completed["archive_path"]) / "files").iterdir())
+    exported_file.write_bytes(b"tampered")
+
+    with pytest.raises(ExportFailure, match="SHA-256"):
+        load_export_manifest(database, job["id"])

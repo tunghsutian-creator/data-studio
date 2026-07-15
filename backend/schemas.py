@@ -148,3 +148,14 @@ class ExportPreviewRequest(BaseModel):
         if self.excluded_asset_ids and self.filter is None:
             raise ValueError("excluded_asset_ids may only be used with filter selection")
         return self
+
+
+class ExportCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selection_token: str = Field(min_length=32, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    purpose: str | None = Field(default=None, max_length=2000)
+    collection_id: str | None = Field(default=None, max_length=200)
+    export_mode: Literal["FOLDER", "ZIP64", "MANIFEST_ONLY"] = "FOLDER"
+    duplicate_policy: Literal["PRESERVE", "DEDUPLICATE"] = "PRESERVE"
