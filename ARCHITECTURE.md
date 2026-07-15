@@ -41,6 +41,14 @@ explicit retry or abstention policy. A deterministic fake provider supplies
 the same contract for queue, recovery and API tests. Rules-only operation does
 not depend on constructing a provider.
 
+Local AI is opt-in (`ai_enabled=false` by default). The FastAPI lifespan owns a
+single-concurrency worker service, wakes it after a durable enqueue, and closes
+the provider on shutdown or configuration replacement. Enabling AI validates
+the repository profile and model lock before swapping runtime state. The scan,
+rules and manual review paths remain available when the provider is disabled or
+offline. Browser health/task endpoints expose allowlisted fields only; worker
+lease ownership and local model/source paths remain internal.
+
 ## Durable AI state
 
 Local AI work uses three catalog tables. `model_registry` is an immutable

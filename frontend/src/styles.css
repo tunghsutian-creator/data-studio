@@ -370,6 +370,39 @@ th:nth-child(9), td:nth-child(9) { width: 116px; }
 .model-score .confidence-track { width: 100%; height: 5px; }
 .model-score > p { display: flex; align-items: flex-start; gap: 5px; margin: 7px 0 0; color: var(--text-muted); font-size: 9px; line-height: 1.4; }
 .model-score > p svg { flex: 0 0 auto; color: var(--warning); }
+.ai-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.ai-panel > header > div { display: flex; align-items: center; min-width: 0; gap: 6px; color: var(--accent); }
+.ai-panel > header h2 { margin: 0; }
+.ai-health { flex: 0 0 auto; padding: 2px 5px; border-radius: 4px; font-size: 8px; font-weight: 650; }
+.ai-health.is-online { color: #208257; background: #eaf7f0; }
+.ai-health.is-offline { color: #b46708; background: #fff2df; }
+.ai-health.is-disabled, .ai-health.is-loading { color: #667085; background: #edf0f3; }
+.ai-run-button { display: inline-flex; align-items: center; justify-content: center; min-height: 27px; gap: 4px; padding: 0 8px; border: 1px solid #9dc9d2; border-radius: 5px; color: var(--accent); background: #f5fbfc; font-size: 9px; font-weight: 650; white-space: nowrap; }
+.ai-run-button:hover { border-color: var(--accent); background: #edf8fa; }
+.ai-progress, .ai-error { display: flex; align-items: center; gap: 8px; min-height: 46px; padding: 9px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--accent); background: #f8fbfc; }
+.ai-progress > span, .ai-error > span { display: grid; gap: 2px; }
+.ai-progress strong, .ai-error strong { color: #344054; font-size: 10px; }
+.ai-progress small, .ai-error small { color: var(--text-muted); font-size: 8.5px; line-height: 1.4; }
+.ai-error { color: var(--danger); border-color: #efd0cc; background: #fff8f7; }
+.ai-empty, .ai-load-error { margin: 0; padding: 9px; border: 1px dashed var(--border-strong); border-radius: var(--radius-control); color: var(--text-muted); font-size: 9px; line-height: 1.5; }
+.ai-load-error { color: var(--danger); border-color: #efd0cc; background: #fff8f7; }
+.ai-suggestion { display: grid; gap: 8px; padding: 9px; border: 1px solid #bfe2ce; border-radius: var(--radius-control); background: #f7fcf9; }
+.ai-suggestion-head { display: flex; align-items: center; justify-content: space-between; }
+.ai-suggestion-head > span { display: flex; align-items: center; gap: 5px; color: var(--success); }
+.ai-suggestion-head strong, .ai-suggestion-head b { color: #27694d; font-size: 11px; }
+.ai-suggestion dl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 9px; margin: 0; }
+.ai-suggestion dl > div { min-width: 0; }
+.ai-suggestion dt { color: var(--text-muted); font-size: 8px; }
+.ai-suggestion dd { margin: 2px 0 0; overflow: hidden; color: #344054; font-size: 9px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.ai-evidence { display: grid; gap: 4px; margin: 0; padding: 7px 0 0; border-top: 1px solid #d8eee1; list-style: none; color: #445066; font-size: 8.5px; line-height: 1.4; }
+.ai-evidence li { display: grid; grid-template-columns: auto 1fr; gap: 5px; }
+.ai-evidence span { align-self: start; padding: 1px 4px; border-radius: 3px; color: #27694d; background: #e7f5ec; font-size: 7.5px; }
+.ai-abstain { margin: 0; color: #9b5c0a; font-size: 8.5px; line-height: 1.4; }
+.ai-version { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 2px 5px; padding-top: 7px; border-top: 1px solid #d8eee1; color: #526174; }
+.ai-version span { overflow: hidden; font-size: 8px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.ai-version small { grid-column: 2; overflow: hidden; color: var(--text-muted); font-size: 7.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ai-safety-note { display: flex; align-items: flex-start; gap: 5px; margin: 7px 0 0; color: var(--text-muted); font-size: 8px; line-height: 1.4; }
+.ai-safety-note svg { flex: 0 0 auto; color: var(--warning); }
 .inspector-actions { display: grid; grid-template-columns: 1.15fr .8fr 1fr; gap: 7px; flex: 0 0 auto; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface); }
 .inspector-actions .button { min-height: 36px; padding-inline: 8px; font-size: 11px; }
 .inspector-empty { display: grid; place-content: center; justify-items: center; height: 100%; gap: 8px; color: var(--text-muted); text-align: center; }

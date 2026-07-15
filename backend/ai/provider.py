@@ -317,7 +317,7 @@ class LlamaCppProvider:
 
     def health(self) -> ProviderHealth:
         try:
-            response = self._client.get("/health")
+            response = self._client.get("/health", timeout=5.0)
             payload = response.json()
             status = str(payload.get("status", "unknown")) if isinstance(payload, dict) else "invalid"
             available = response.status_code == 200 and status == "ok"

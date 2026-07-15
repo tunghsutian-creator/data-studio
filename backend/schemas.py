@@ -37,6 +37,13 @@ class ConfigUpdate(BaseModel):
     quarantine_root: str | None = None
     catalog_path: str | None = None
     model_path: str | None = None
+    ai_enabled: bool | None = None
+    ai_profile_path: str | None = None
+    ai_model_lock_path: str | None = None
+    ai_worker_poll_seconds: float | None = None
+    ai_provider_timeout_seconds: float | None = None
+    ai_lease_seconds: int | None = None
+    ai_base_retry_delay_seconds: int | None = None
     export_root: str | None = None
     backup_root: str | None = None
     auto_scan_seconds: float | None = None
@@ -58,7 +65,18 @@ class ConfigUpdate(BaseModel):
     autoScan: bool | None = None
     scanInterval: str | float | None = None
     model: str | None = None
+    aiEnabled: bool | None = None
+    aiProfilePath: str | None = None
+    aiModelLockPath: str | None = None
     confidenceThreshold: float | None = None
+
+
+class AIAnalyzeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="MANUAL_REQUEST", min_length=1, max_length=200)
+    priority: int = Field(default=100, ge=-1000, le=1000)
+    max_attempts: int = Field(default=2, ge=1, le=10)
 
 
 class RuleCreate(BaseModel):

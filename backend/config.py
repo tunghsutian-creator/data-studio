@@ -13,6 +13,10 @@ def _default_base() -> Path:
     return Path(os.environ.get("ACADEMIC_VAULT_HOME", Path.cwd() / ".academic-vault"))
 
 
+def _bundled_profile(name: str) -> Path:
+    return Path(__file__).resolve().parent.parent / "profiles" / name
+
+
 def _is_within(child: str | Path, parent: str | Path) -> bool:
     child_text = os.path.normcase(str(Path(child).expanduser().resolve(strict=False)))
     parent_text = os.path.normcase(str(Path(parent).expanduser().resolve(strict=False)))
@@ -32,6 +36,13 @@ class Settings:
     quarantine_root: Path = _default_base() / "quarantine"
     catalog_path: Path = _default_base() / "catalog" / "academic_vault.sqlite3"
     model_path: Path = _default_base() / "models" / "modality-classifier.joblib"
+    ai_enabled: bool = False
+    ai_profile_path: Path = _bundled_profile("windows-rtx5080.json")
+    ai_model_lock_path: Path = _bundled_profile("windows-model-lock.json")
+    ai_worker_poll_seconds: float = 1.0
+    ai_provider_timeout_seconds: float = 120.0
+    ai_lease_seconds: int = 180
+    ai_base_retry_delay_seconds: int = 5
     export_root: Path | None = None
     backup_root: Path | None = None
     auto_scan_seconds: float = 30
@@ -54,6 +65,21 @@ class Settings:
             raise ValueError("port must be between 1 and 65535")
         if self.stable_file_seconds < 0 or self.auto_scan_seconds < 0:
             raise ValueError("scan intervals cannot be negative")
+        if not 0.1 <= self.ai_worker_poll_seconds <= 60:
+            raise ValueError("ai_worker_poll_seconds must be between 0.1 and 60")
+        if not 1 <= self.ai_provider_timeout_seconds <= 600:
+            raise ValueError("ai_provider_timeout_seconds must be between 1 and 600")
+        if not 5 <= self.ai_lease_seconds <= 3600:
+            raise ValueError("ai_lease_seconds must be between 5 and 3600")
+        if not 0 <= self.ai_base_retry_delay_seconds <= 3600:
+            raise ValueError("ai_base_retry_delay_seconds must be between 0 and 3600")
+        if Path(self.ai_profile_path).resolve(strict=False) == Path(self.ai_model_lock_path).resolve(strict=False):
+            raise ValueError("ai_profile_path and ai_model_lock_path must be different files")
+        if self.ai_enabled:
+            if not Path(self.ai_profile_path).is_file():
+                raise ValueError("enabled local AI profile does not exist")
+            if not Path(self.ai_model_lock_path).is_file():
+                raise ValueError("enabled local AI model lock does not exist")
         if self.auto_accept_enabled:
             raise ValueError("automatic acceptance is disabled; every Inbox dataset requires human review")
         roots = {
@@ -96,6 +122,8 @@ class Settings:
             "quarantine_root",
             "catalog_path",
             "model_path",
+            "ai_profile_path",
+            "ai_model_lock_path",
             "export_root",
             "backup_root",
             "config_file",
@@ -147,6 +175,9 @@ class Settings:
                 "autoScan": self.auto_scan_seconds > 0,
                 "scanInterval": self.auto_scan_seconds,
                 "model": "local-lightweight-v1" if Path(self.model_path).is_file() else "rules-only",
+                "aiEnabled": self.ai_enabled,
+                "aiProfilePath": str(self.ai_profile_path),
+                "aiModelLockPath": str(self.ai_model_lock_path),
                 "autoAcceptEnabled": False,
                 "reviewPolicy": "manual",
             }

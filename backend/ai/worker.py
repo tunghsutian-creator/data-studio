@@ -340,8 +340,77 @@ class AIWorker:
         return outcomes
 
 
+class AIWorkerService:
+    """Own an AI worker thread and wake it when durable work is enqueued."""
+
+    def __init__(self, worker: AIWorker, *, poll_seconds: float = 1.0) -> None:
+        if not 0.1 <= poll_seconds <= 60:
+            raise ValueError("poll_seconds must be between 0.1 and 60")
+        self.worker = worker
+        self.poll_seconds = poll_seconds
+        self.last_outcome: WorkerOutcome | None = None
+        self.last_error: str | None = None
+        self._stop = threading.Event()
+        self._wakeup = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._closed = False
+
+    @property
+    def running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    def start(self) -> None:
+        if self._closed:
+            raise RuntimeError("AI worker service is closed")
+        if self.running:
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="academic-vault-ai-worker",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def wake(self) -> None:
+        self._wakeup.set()
+
+    def _run(self) -> None:
+        try:
+            while not self._stop.is_set():
+                try:
+                    outcome = self.worker.process_next()
+                    if outcome is not None:
+                        self.last_outcome = outcome
+                        self.last_error = None
+                        continue
+                except Exception as exc:
+                    self.last_error = type(exc).__name__
+                    logger.exception("Local AI worker service iteration failed")
+                self._wakeup.wait(self.poll_seconds)
+                self._wakeup.clear()
+        finally:
+            self.worker.close()
+            self._closed = True
+
+    def stop(self, *, timeout_seconds: float = 5.0) -> bool:
+        if timeout_seconds < 0:
+            raise ValueError("timeout_seconds may not be negative")
+        self._stop.set()
+        self._wakeup.set()
+        thread = self._thread
+        if thread is None:
+            if not self._closed:
+                self.worker.close()
+                self._closed = True
+            return True
+        thread.join(timeout=timeout_seconds)
+        return not thread.is_alive()
+
+
 __all__ = [
     "AIWorker",
+    "AIWorkerService",
     "InputChanged",
     "LockedLlamaProvider",
     "ProviderIdentityMismatch",

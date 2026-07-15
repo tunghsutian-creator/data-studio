@@ -10,6 +10,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import { ConfidenceBar, StatusPill } from "./Catalog.jsx";
+import { AIAnalysisPanel } from "./AIAnalysisPanel.jsx";
 
 function CopyButton({ value, label, onToast }) {
   async function copy() {
@@ -100,10 +101,12 @@ export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast
         </section>
 
         <section className="inspector-section model-score">
-          <div><h2>本地 AI 置信度</h2><strong>{score}%</strong></div>
+          <div><h2>规则分类置信度</h2><strong>{score}%</strong></div>
           <ConfidenceBar value={dataset.confidence} showNumber={false} />
-          <p><WarningCircle size={15} />{warning} 模型分数不代表确定事实。</p>
+          <p><WarningCircle size={15} />{warning} 规则置信度不代表确定事实。</p>
         </section>
+
+        <AIAnalysisPanel datasetId={dataset.id} onToast={onToast} />
       </div>
 
       <footer className="inspector-actions">

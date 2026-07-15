@@ -444,6 +444,18 @@ class Database:
                 ).fetchone()[0]
             )
 
+    def ai_task_counts(self) -> dict[str, int]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT status,COUNT(*) AS count FROM ai_tasks GROUP BY status"
+            ).fetchall()
+        counts = {str(row["status"]): int(row["count"]) for row in rows}
+        counts["ACTIVE"] = sum(
+            counts.get(status, 0) for status in ("QUEUED", "RUNNING", "RETRY_WAIT")
+        )
+        counts["TOTAL"] = sum(value for key, value in counts.items() if key not in {"ACTIVE", "TOTAL"})
+        return counts
+
     @staticmethod
     def _ai_task_dict(row: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
         return dict(row)

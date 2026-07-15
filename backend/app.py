@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 import re
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,11 +17,22 @@ from .config import Settings, load_settings
 from .database import Database
 from .ingestion import accept_dataset, defer_dataset
 from .scanner import directory_signature, scan_source
-from .schemas import ConfigUpdate, DatasetUpdate, DecisionRequest, RuleCreate, RuleUpdate, ScanRequest
+from .schemas import (
+    AIAnalyzeRequest,
+    ConfigUpdate,
+    DatasetUpdate,
+    DecisionRequest,
+    RuleCreate,
+    RuleUpdate,
+    ScanRequest,
+)
 from .taxonomy import normalize_modality
 
 
 logger = logging.getLogger(__name__)
+
+
+AIWorkerFactory = Callable[[Settings, Database], Any]
 
 
 def _database_for(settings: Settings) -> Database:
@@ -40,6 +51,120 @@ def _database(request: Request) -> Database:
 
 def _settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def _default_ai_worker(settings: Settings, database: Database):
+    from .ai.evidence import EvidenceBuilder
+    from .ai.worker import AIWorker, load_locked_llama_provider
+
+    bundle = load_locked_llama_provider(
+        settings.ai_profile_path,
+        settings.ai_model_lock_path,
+        timeout_seconds=settings.ai_provider_timeout_seconds,
+    )
+    try:
+        return AIWorker(
+            database,
+            EvidenceBuilder(database, settings.root_mapper(), bundle.profile),
+            bundle.provider,
+            registry_config=bundle.registry_config,
+            lease_seconds=settings.ai_lease_seconds,
+            base_retry_delay_seconds=settings.ai_base_retry_delay_seconds,
+        )
+    except Exception:
+        bundle.provider.close()
+        raise
+
+
+def _ai_service_for(
+    settings: Settings,
+    database: Database,
+    worker_factory: AIWorkerFactory | None,
+):
+    if not settings.ai_enabled:
+        return None
+    from .ai.worker import AIWorkerService
+
+    worker = (worker_factory or _default_ai_worker)(settings, database)
+    return AIWorkerService(worker, poll_seconds=settings.ai_worker_poll_seconds)
+
+
+def _public_registered_model(item: dict[str, Any] | None) -> dict[str, Any] | None:
+    if item is None:
+        return None
+    fields = {
+        "id",
+        "provider",
+        "profile_id",
+        "model_id",
+        "quantization",
+        "device",
+        "model_revision",
+        "runtime_release",
+        "runtime_commit",
+        "prompt_version",
+        "taxonomy_version",
+        "output_schema_version",
+        "enabled",
+    }
+    return {key: value for key, value in item.items() if key in fields}
+
+
+def _public_ai_task(item: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        "id",
+        "dataset_id",
+        "input_fingerprint",
+        "reason",
+        "status",
+        "priority",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "last_error_code",
+        "last_error_detail",
+        "created_at",
+        "updated_at",
+        "started_at",
+        "finished_at",
+        "created",
+    }
+    return {key: value for key, value in item.items() if key in fields}
+
+
+def _public_ai_run(item: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        "id",
+        "task_id",
+        "model_registry_id",
+        "attempt_number",
+        "status",
+        "request_fingerprint",
+        "response_sha256",
+        "classification",
+        "latency_ms",
+        "error_code",
+        "error_detail",
+        "retryable",
+        "started_at",
+        "finished_at",
+    }
+    return {key: value for key, value in item.items() if key in fields}
+
+
+def _ai_task_detail(database: Database, task: dict[str, Any]) -> dict[str, Any]:
+    item = _public_ai_task(task)
+    runs = [_public_ai_run(run) for run in database.list_ai_runs(str(task["id"]))]
+    models: dict[str, dict[str, Any] | None] = {}
+    for run in runs:
+        registry_id = str(run["model_registry_id"])
+        if registry_id not in models:
+            models[registry_id] = _public_registered_model(
+                database.get_registered_model(registry_id)
+            )
+        run["model"] = models[registry_id]
+    item["runs"] = runs
+    return item
 
 
 def _configure_local_model(settings: Settings) -> bool:
@@ -149,7 +274,11 @@ async def _auto_scan_loop(app: FastAPI) -> None:
         await _wait_for_monitor(app, interval)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    ai_worker_factory: AIWorkerFactory | None = None,
+) -> FastAPI:
     configured = settings or load_settings()
     database = _database_for(configured)
 
@@ -159,27 +288,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database.initialize()
         database.recover_interrupted_jobs()
         database.recover_ai_tasks()
-        application.state.model_loaded = _configure_local_model(configured)
         application.state.monitor_loop = asyncio.get_running_loop()
         application.state.monitor_wakeup = asyncio.Event()
         application.state.monitor_cancel = threading.Event()
-        monitor_task = asyncio.create_task(_auto_scan_loop(application), name="academic-vault-inbox-monitor")
-        application.state.monitor_task = monitor_task
+        monitor_task: asyncio.Task | None = None
         try:
+            application.state.model_loaded = _configure_local_model(configured)
+            ai_service = _ai_service_for(configured, database, ai_worker_factory)
+            application.state.ai_service = ai_service
+            if ai_service:
+                ai_service.start()
+            monitor_task = asyncio.create_task(
+                _auto_scan_loop(application),
+                name="academic-vault-inbox-monitor",
+            )
+            application.state.monitor_task = monitor_task
             yield
         finally:
+            ai_service = getattr(application.state, "ai_service", None)
+            if ai_service and not ai_service.stop(timeout_seconds=5.0):
+                logger.warning("Local AI worker is still finishing an in-flight request during shutdown")
             application.state.monitor_cancel.set()
             application.state.monitor_wakeup.set()
-            try:
-                await asyncio.wait_for(monitor_task, timeout=5.0)
-            except TimeoutError:
-                monitor_task.cancel()
+            if monitor_task:
                 try:
-                    await monitor_task
+                    await asyncio.wait_for(monitor_task, timeout=5.0)
+                except TimeoutError:
+                    monitor_task.cancel()
+                    try:
+                        await monitor_task
+                    except asyncio.CancelledError:
+                        pass
                 except asyncio.CancelledError:
                     pass
-            except asyncio.CancelledError:
-                pass
             from .classifier import configure_model
 
             configure_model(None)
@@ -188,6 +329,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Academic Vault", version="0.1.0", lifespan=lifespan)
     app.state.settings = configured
     app.state.database = database
+    app.state.ai_service = None
     app.state.config_lock = threading.RLock()
     app.add_middleware(
         CORSMiddleware,
@@ -209,6 +351,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     def health(request: Request) -> dict[str, Any]:
         db = _database(request)
+        ai_service = getattr(request.app.state, "ai_service", None)
         return {
             "status": "ok",
             "service": "academic-vault",
@@ -218,6 +361,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "schema_version": db.schema_version(),
             "library_id": db.library_id(),
             "model_loaded": bool(getattr(request.app.state, "model_loaded", False)),
+            "ai_enabled": ai_service is not None,
+            "ai_worker_running": bool(ai_service and ai_service.running),
         }
 
     @app.get("/api/config")
@@ -242,6 +387,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "catalogPath": "catalog_path",
                 "exportPath": "export_root",
                 "backupPath": "backup_root",
+                "aiEnabled": "ai_enabled",
+                "aiProfilePath": "ai_profile_path",
+                "aiModelLockPath": "ai_model_lock_path",
             }.items():
                 if ui_name in raw:
                     raw[setting_name] = raw[ui_name]
@@ -276,15 +424,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             from . import classifier
 
             previous_model_bundle = classifier._MODEL_BUNDLE
+            replacement_service = None
             try:
+                replacement_service = _ai_service_for(updated, replacement, ai_worker_factory)
                 model_loaded = _configure_local_model(updated)
                 updated.save()
             except Exception:
+                if replacement_service:
+                    replacement_service.stop(timeout_seconds=0)
                 classifier._MODEL_BUNDLE = previous_model_bundle
                 raise
+            previous_service = getattr(request.app.state, "ai_service", None)
+            if previous_service and not previous_service.stop(timeout_seconds=5.0):
+                if replacement_service:
+                    replacement_service.stop(timeout_seconds=0)
+                classifier._MODEL_BUNDLE = previous_model_bundle
+                previous.save()
+                raise HTTPException(
+                    status_code=409,
+                    detail="Local AI worker is still stopping; configuration was not changed",
+                )
             request.app.state.settings = updated
             request.app.state.database = replacement
+            request.app.state.ai_service = replacement_service
             request.app.state.model_loaded = model_loaded
+            if replacement_service:
+                replacement_service.start()
             _wake_auto_scan(request.app)
             return updated.public_dict()
 
@@ -295,6 +460,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/filters")
     def filters(request: Request) -> dict[str, Any]:
         return _database(request).filters()
+
+    @app.get("/api/ai/health")
+    def ai_health(request: Request) -> dict[str, Any]:
+        db = _database(request)
+        service = getattr(request.app.state, "ai_service", None)
+        if service is None:
+            return {
+                "enabled": False,
+                "available": False,
+                "status": "disabled",
+                "local_only": True,
+                "worker_running": False,
+                "queue": db.ai_task_counts(),
+                "model": None,
+            }
+        health_payload = service.worker.health()
+        health_payload.update(
+            {
+                "enabled": True,
+                "local_only": True,
+                "worker_running": service.running,
+                "queue": db.ai_task_counts(),
+                "model": _public_registered_model(service.worker.registered_model),
+                "worker_error": service.last_error,
+            }
+        )
+        return health_payload
+
+    @app.get("/api/ai/tasks")
+    def ai_tasks(
+        request: Request,
+        dataset_id: str | None = None,
+        status: str | None = None,
+        limit: int = Query(100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        try:
+            items = _database(request).list_ai_tasks(
+                dataset_id=dataset_id,
+                status=status,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        items = [_public_ai_task(item) for item in items]
+        return {"items": items, "total": len(items)}
+
+    @app.get("/api/ai/tasks/{task_id}")
+    def ai_task_detail(task_id: str, request: Request) -> dict[str, Any]:
+        db = _database(request)
+        task = db.get_ai_task(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="AI task not found")
+        return _ai_task_detail(db, task)
 
     @app.get("/api/datasets")
     def datasets(
@@ -334,6 +552,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not item:
             raise HTTPException(status_code=404, detail="Dataset not found")
         return item
+
+    @app.get("/api/datasets/{dataset_id}/ai")
+    def dataset_ai(dataset_id: str, request: Request) -> dict[str, Any]:
+        db = _database(request)
+        if db.get_dataset(dataset_id) is None:
+            raise HTTPException(status_code=404, detail="Dataset not found")
+        tasks = [
+            _ai_task_detail(db, task)
+            for task in db.list_ai_tasks(dataset_id=dataset_id, limit=20)
+        ]
+        return {"items": tasks, "total": len(tasks)}
+
+    @app.post("/api/datasets/{dataset_id}/ai/analyze", status_code=202)
+    def analyze_dataset(
+        dataset_id: str,
+        payload: AIAnalyzeRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        from .ai.evidence import EvidenceBuildError
+
+        with request.app.state.config_lock:
+            service = getattr(request.app.state, "ai_service", None)
+            if service is None:
+                raise HTTPException(status_code=409, detail="Local AI is disabled")
+            try:
+                task = service.worker.enqueue(
+                    dataset_id,
+                    reason=payload.reason,
+                    priority=payload.priority,
+                    max_attempts=payload.max_attempts,
+                )
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Dataset not found") from None
+            except EvidenceBuildError as exc:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": exc.code, "message": str(exc)},
+                ) from exc
+            service.wake()
+            return _public_ai_task(task)
 
     @app.patch("/api/datasets/{dataset_id}")
     @app.put("/api/datasets/{dataset_id}")

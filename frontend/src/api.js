@@ -175,6 +175,9 @@ async function request(path, { timeoutMs = REQUEST_TIMEOUT, signal: externalSign
       try {
         const payload = await response.json();
         detail = payload?.detail || detail;
+        if (detail && typeof detail === "object") {
+          detail = [detail.code, detail.message].filter(Boolean).join(": ") || "API " + response.status;
+        }
       } catch {
         // Keep the status-based message when the response is not JSON.
       }
@@ -297,4 +300,21 @@ export async function patchRule(id, changes) {
     body: JSON.stringify(changes),
   });
   return normalizeRule(payload);
+}
+
+export async function loadAIHealth({ signal } = {}) {
+  return request("/ai/health", { signal });
+}
+
+export async function loadDatasetAI(id, { signal } = {}) {
+  const payload = await request("/datasets/" + encodeURIComponent(id) + "/ai", { signal });
+  return getPayloadItems(payload);
+}
+
+export async function requestAIAnalysis(id) {
+  return request("/datasets/" + encodeURIComponent(id) + "/ai/analyze", {
+    method: "POST",
+    timeoutMs: 10 * 60 * 1000,
+    body: JSON.stringify({ reason: "MANUAL_REQUEST", max_attempts: 2 }),
+  });
 }

@@ -24,12 +24,13 @@ from .provider import (
     ProviderTimeout,
     ProviderUnavailable,
 )
-from .worker import AIWorker, WorkerOutcome, load_locked_llama_provider
+from .worker import AIWorker, AIWorkerService, WorkerOutcome, load_locked_llama_provider
 
 __all__ = [
     "AIClassification",
     "AnalysisRequest",
     "AIWorker",
+    "AIWorkerService",
     "Evidence",
     "EvidenceBuildError",
     "EvidenceBuilder",
