@@ -28,6 +28,7 @@ from backend.ai.benchmark import (  # noqa: E402
     select_diagnostic_datasets,
 )
 from backend.ai.model_lock import load_model_lock  # noqa: E402
+from backend.ai.provider import ProviderIdentity  # noqa: E402
 from backend.paths import RootMapper  # noqa: E402
 
 
@@ -119,7 +120,17 @@ def main() -> int:
             ],
         }
     else:
-        client = LlamaCppClient(profile)
+        identity = ProviderIdentity(
+            provider=profile.provider,
+            profile_id=profile.profile_id,
+            model_id=profile.model_id,
+            quantization=profile.quantization,
+            device=profile.device,
+            model_revision=model_lock.model.revision,
+            runtime_release=model_lock.runtime.release,
+            runtime_commit=model_lock.runtime.commit,
+        )
+        client = LlamaCppClient(profile, identity=identity)
         try:
             health = client.health()
             payload = run_benchmark(packs, client, profile, repeat_probe=args.repeat_probe)

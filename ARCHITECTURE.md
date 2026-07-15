@@ -26,6 +26,21 @@ Reference scans never copy, move, rename or delete source files.
 Rules emit evidence and a version. Model scores never grant delete or overwrite
 authority.
 
+## Local AI provider boundary
+
+`LocalModelProvider` is the only production-facing model interface. It accepts
+a deterministic SHA-256 input fingerprint plus bounded evidence already held
+in memory; it has no source-path or filesystem mutation API. Provider results
+carry the model profile and prompt/taxonomy/schema versions, while the model
+registry adds the locked model revision and runtime build.
+
+The llama.cpp implementation is loopback-only and returns a strictly validated
+classification. Timeout, unavailable service, rejected request and invalid
+model output are distinct typed failures so the persistent worker can apply an
+explicit retry or abstention policy. A deterministic fake provider supplies
+the same contract for queue, recovery and API tests. Rules-only operation does
+not depend on constructing a provider.
+
 ## Canonical taxonomy
 
 - workstream: `REFERENCE`, `PA_ADR_RECYCLE`, `D_PA`, `UDC`, `UNKNOWN`
@@ -47,4 +62,3 @@ authority.
 
 `original_path` is immutable. Paths and names are not identifiers; UUIDs and
 SHA-256 provide stable identity and integrity.
-

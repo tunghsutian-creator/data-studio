@@ -1,10 +1,39 @@
-"""Local-only AI contracts and feasibility tooling.
-
-The production catalog does not depend on this package. Phase 1 uses it only
-for read-only benchmarking until the model passes the documented gate.
-"""
+"""Local-only AI contracts, providers, and feasibility tooling."""
 
 from .contracts import AIClassification, Evidence
 from .model_lock import WindowsModelLock, load_model_lock
+from .provider import (
+    AnalysisRequest,
+    FakeLocalModelProvider,
+    LlamaCppProvider,
+    LocalModelProfile,
+    LocalModelProvider,
+    ProviderAnalysisResult,
+    ProviderError,
+    ProviderHealth,
+    ProviderIdentity,
+    ProviderInvalidResponse,
+    ProviderRequestError,
+    ProviderTimeout,
+    ProviderUnavailable,
+)
 
-__all__ = ["AIClassification", "Evidence", "WindowsModelLock", "load_model_lock"]
+__all__ = [
+    "AIClassification",
+    "AnalysisRequest",
+    "Evidence",
+    "FakeLocalModelProvider",
+    "LlamaCppProvider",
+    "LocalModelProfile",
+    "LocalModelProvider",
+    "ProviderAnalysisResult",
+    "ProviderError",
+    "ProviderHealth",
+    "ProviderIdentity",
+    "ProviderInvalidResponse",
+    "ProviderRequestError",
+    "ProviderTimeout",
+    "ProviderUnavailable",
+    "WindowsModelLock",
+    "load_model_lock",
+]

@@ -19,13 +19,21 @@ from backend.ai.model_lock import load_model_lock
 
 def profile(tmp_path: Path) -> BenchmarkProfile:
     payload = {
+        "profile_schema_version": 1,
         "profile_id": "test-q8",
+        "provider": "llama.cpp",
+        "model_id": "test-model",
+        "quantization": "Q8_0",
+        "device": "CPU",
         "server": {
             "host": "127.0.0.1",
             "port": 8877,
+            "context_tokens": 8192,
             "max_output_tokens": 512,
             "temperature": 0,
             "seed": 42,
+            "parallel_requests": 1,
+            "flash_attention": False,
         },
         "evidence": {
             "max_text_bytes_per_asset": 1024,
@@ -34,7 +42,12 @@ def profile(tmp_path: Path) -> BenchmarkProfile:
             "max_image_edge": 512,
             "max_image_bytes": 1024 * 1024,
         },
-        "safety": {"read_only_sources": True, "allow_file_actions": False},
+        "safety": {
+            "loopback_only": True,
+            "read_only_sources": True,
+            "allow_file_actions": False,
+            "auto_accept": False,
+        },
     }
     path = tmp_path / "profile.json"
     path.write_text(json.dumps(payload), encoding="utf-8")

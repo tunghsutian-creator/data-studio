@@ -8,7 +8,6 @@ import sqlite3
 import statistics
 import subprocess
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,59 +23,21 @@ from .contracts import (
     AI_OUTPUT_SCHEMA_VERSION,
     PROMPT_VERSION,
     AIClassification,
-    output_json_schema,
-    parse_classification_response,
+)
+from .provider import (
+    AnalysisRequest,
+    LlamaCppProvider,
+    LocalModelProfile,
+    ProviderError,
+    ProviderIdentity,
+    ProviderUnavailable,
+    TAXONOMY_VERSION,
 )
 
 
 TEXT_EXTENSIONS = {".csv", ".txt", ".tsv", ".out", ".err", ".lsp", ".fpo", ".dat"}
 IMAGE_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp", ".webp"}
-TAXONOMY_VERSION = "builtin-v1"
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkProfile:
-    profile_id: str
-    host: str
-    port: int
-    max_output_tokens: int
-    temperature: float
-    seed: int
-    max_text_bytes: int
-    max_text_assets: int
-    max_images: int
-    max_image_edge: int
-    max_image_bytes: int
-
-    @classmethod
-    def load(cls, path: str | Path) -> "BenchmarkProfile":
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-        server = payload["server"]
-        evidence = payload["evidence"]
-        if server["host"] not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("benchmark model server must use a loopback host")
-        if not payload.get("safety", {}).get("read_only_sources"):
-            raise ValueError("benchmark profile must declare read_only_sources")
-        if payload.get("safety", {}).get("allow_file_actions"):
-            raise ValueError("benchmark profile may not allow model file actions")
-        return cls(
-            profile_id=str(payload["profile_id"]),
-            host=str(server["host"]),
-            port=int(server["port"]),
-            max_output_tokens=int(server["max_output_tokens"]),
-            temperature=float(server["temperature"]),
-            seed=int(server["seed"]),
-            max_text_bytes=int(evidence["max_text_bytes_per_asset"]),
-            max_text_assets=int(evidence["max_text_assets"]),
-            max_images=int(evidence["max_images"]),
-            max_image_edge=int(evidence["max_image_edge"]),
-            max_image_bytes=int(evidence["max_image_bytes"]),
-        )
-
-    @property
-    def base_url(self) -> str:
-        host = f"[{self.host}]" if ":" in self.host else self.host
-        return f"http://{host}:{self.port}"
+BenchmarkProfile = LocalModelProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,18 +297,6 @@ def build_evidence_pack(
     )
 
 
-def _system_prompt() -> str:
-    modalities = ", ".join(item.value for item in Modality)
-    return (
-        "You classify local scientific research datasets. Deterministic parsers and rules have already run. "
-        "Use only the supplied bounded evidence; never infer from missing filenames or directory names. "
-        f"modality must be one of: {modalities}. When evidence is insufficient, use UNKNOWN, set needs_review "
-        "to true, and provide a non-empty abstain_reason. "
-        "Use UNASSIGNED for an unknown workstream. evidence must contain one to three concise concrete items; "
-        "for UNKNOWN use evidence kind abstention. Return only the requested JSON object."
-    )
-
-
 class LlamaCppClient:
     def __init__(
         self,
@@ -355,83 +304,35 @@ class LlamaCppClient:
         *,
         timeout_seconds: float = 120,
         transport: httpx.BaseTransport | None = None,
+        identity: ProviderIdentity | None = None,
     ):
         self.profile = profile
-        self.client = httpx.Client(
-            base_url=profile.base_url,
-            timeout=timeout_seconds,
+        self.provider = LlamaCppProvider(
+            profile,
+            timeout_seconds=timeout_seconds,
             transport=transport,
+            identity=identity,
         )
 
     def close(self) -> None:
-        self.client.close()
+        self.provider.close()
 
     def health(self) -> dict[str, Any]:
-        response = self.client.get("/health")
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError("llama.cpp health response must be an object")
-        return payload
+        health = self.provider.health()
+        if not health.available:
+            raise ProviderUnavailable(health.detail or "llama.cpp is unavailable")
+        return health.to_dict()
 
     def classify(self, pack: EvidencePack) -> InferenceResult:
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": "Classify this evidence pack:\n" + pack.structured_text}
-        ]
-        content.extend(
-            {"type": "image_url", "image_url": {"url": data_url}}
-            for data_url in pack.image_data_urls
-        )
-        request = {
-            "messages": [
-                {"role": "system", "content": _system_prompt()},
-                {"role": "user", "content": content},
-            ],
-            "temperature": self.profile.temperature,
-            "seed": self.profile.seed,
-            "max_tokens": self.profile.max_output_tokens,
-            "stream": False,
-            "cache_prompt": False,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "academic_vault_classification",
-                    "strict": True,
-                    "schema": output_json_schema(),
-                },
-            },
-        }
-        started = time.perf_counter()
         try:
-            response = self.client.post("/v1/chat/completions", json=request)
-            response.raise_for_status()
-            payload = response.json()
-            raw = payload["choices"][0]["message"]["content"]
-            if isinstance(raw, list):
-                raw = "".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in raw)
-            raw_text = str(raw)
-            try:
-                parsed = parse_classification_response(raw_text)
-            except Exception as exc:
-                return InferenceResult(
-                    None,
-                    int((time.perf_counter() - started) * 1000),
-                    raw_text,
-                    str(exc),
-                )
-            return InferenceResult(parsed, int((time.perf_counter() - started) * 1000), raw_text, None)
-        except httpx.HTTPStatusError as exc:
-            detail = exc.response.text.strip().replace("\x00", "")
-            if len(detail) > 2000:
-                detail = detail[:2000] + "..."
-            return InferenceResult(
-                None,
-                int((time.perf_counter() - started) * 1000),
-                "",
-                f"HTTP {exc.response.status_code}: {detail}",
+            request = AnalysisRequest.from_evidence(
+                pack.structured_text,
+                pack.image_data_urls,
             )
-        except Exception as exc:
-            return InferenceResult(None, int((time.perf_counter() - started) * 1000), "", str(exc))
+            result = self.provider.analyze(request)
+            return InferenceResult(result.classification, result.latency_ms, "", None)
+        except ProviderError as exc:
+            return InferenceResult(None, exc.latency_ms, "", f"{exc.code}: {exc}")
 
 
 class GpuMemorySampler:
