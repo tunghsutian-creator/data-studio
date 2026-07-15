@@ -156,8 +156,15 @@ projector leaves an expired lease that another worker may reclaim.
 
 The schema stores only a vault identity and normalized note-relative path.
 Absolute raw, Inbox, managed-Vault and export paths are not outbox payloads and
-will not be written to Markdown. `last_managed_hash` is separate from the full
-note hash so a future projector can preserve user-authored Research notes while
-detecting edits inside the database-owned block. This foundation does not
-install Obsidian or create a real notes Vault; those mutations require the
+are never rendered into Markdown. `last_managed_hash` is separate from the full
+note hash, so the projector preserves user-authored Research notes while
+rejecting edits inside the database-owned frontmatter/managed block. Note
+writes use a same-directory temporary file, `fsync`, a last-moment hash check
+and atomic replacement; missing linked notes, duplicate `av_id` values,
+symlink/junction parents and overlapping data roots fail closed. Dataset delete
+events mark the managed note tombstoned without deleting user text.
+
+The projector currently accepts an explicitly supplied Vault root and is wired
+only into synthetic tests. It does not install Obsidian, create a real notes
+Vault or start a background projection service; those mutations require the
 separately approved Phase 5 setup.
