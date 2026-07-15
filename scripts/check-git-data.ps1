@@ -17,7 +17,7 @@ if (-not $repo) {
 $forbiddenPrefixes = @(
     "data/", "data ref/", "inbox/", "vault/", "catalog/", "models/",
     "runtimes/", "exports/", "backups/", "quarantine/", "academic-notes/",
-    "benchmark-results/"
+    "benchmark-results/", "evaluation/", "gold-set-results/"
 )
 $forbiddenExtensions = @(
     ".sqlite", ".sqlite3", ".db", ".gguf", ".safetensors", ".joblib",
@@ -27,6 +27,7 @@ $forbiddenExtensions = @(
 )
 $imageExtensions = @(".png", ".jpg", ".jpeg", ".webp")
 $allowedImagePrefixes = @("design/", "frontend/public/")
+$forbiddenNames = @("candidate-audit.json", "blind-review.csv")
 $maximumBytes = 5MB
 
 $paths = @()
@@ -50,6 +51,9 @@ foreach ($rawPath in $paths) {
     }
 
     $extension = [System.IO.Path]::GetExtension($lower)
+    if ($forbiddenNames -contains [System.IO.Path]::GetFileName($lower)) {
+        $violations.Add("forbidden real-data evaluation artifact: $path")
+    }
     if ($forbiddenExtensions -contains $extension -or
         $lower.EndsWith(".sqlite-wal") -or $lower.EndsWith(".sqlite-shm") -or
         $lower.EndsWith(".sqlite3-wal") -or $lower.EndsWith(".sqlite3-shm") -or

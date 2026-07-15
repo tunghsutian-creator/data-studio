@@ -21,6 +21,10 @@ config.json
 /quarantine/
 /academic-notes/
 /benchmark-results/
+/evaluation/
+/gold-set-results/
+candidate-audit.json
+blind-review.csv
 *.sqlite
 *.sqlite-*
 *.sqlite3
