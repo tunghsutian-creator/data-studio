@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.config import Settings
+from backend.database import utc_now
 
 
 def api_settings(tmp_path: Path) -> Settings:
@@ -54,7 +55,7 @@ def test_api_contract_aliases_and_rule_shape(tmp_path: Path) -> None:
         rules = client.get("/api/rules").json()["items"]
         assert rules and {"name", "description", "scope", "enabled"} <= rules[0].keys()
 
-        saved = client.put(
+        rejected = client.put(
             "/api/config",
             json={
                 **config,
@@ -64,5 +65,56 @@ def test_api_contract_aliases_and_rule_shape(tmp_path: Path) -> None:
                 "verifySha256": True,
             },
         )
-        assert saved.status_code == 200
-        assert saved.json()["auto_accept_threshold"] == 0.85
+        assert rejected.status_code == 400
+        assert "automatic acceptance" in rejected.json()["detail"].lower()
+        assert config["auto_accept_enabled"] is False
+        assert config["reviewPolicy"] == "manual"
+
+
+def test_api_paginates_and_searches_more_than_five_hundred_datasets(tmp_path: Path) -> None:
+    application = create_app(api_settings(tmp_path))
+    with TestClient(application) as client:
+        database = application.state.database
+        library_id = database.library_id()
+        now = utc_now()
+        with database.transaction() as connection:
+            connection.executemany(
+                """
+                INSERT INTO datasets(
+                    id,source_kind,group_key,source_root,canonical_name,workstream,
+                    material_state,modality,status,created_at,updated_at,library_id,revision
+                ) VALUES(?,?,?,?,?,'D_PA','VIRGIN','SEM','INDEXED',?,?,?,1)
+                """,
+                [
+                    (
+                        f"dataset-{index:04d}",
+                        "reference",
+                        f"group-{index:04d}",
+                        str(tmp_path / "reference"),
+                        f"DATASET_{index:04d}",
+                        now,
+                        now,
+                        library_id,
+                    )
+                    for index in range(620)
+                ],
+            )
+
+        collected: list[str] = []
+        for offset in range(0, 620, 50):
+            response = client.get(
+                "/api/datasets",
+                params={"limit": 50, "offset": offset, "sort": "canonical_name", "order": "asc"},
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["total"] == 620
+            collected.extend(item["id"] for item in payload["items"])
+        assert len(collected) == 620
+        assert len(set(collected)) == 620
+        assert collected[0] == "dataset-0000"
+        assert collected[-1] == "dataset-0619"
+
+        searched = client.get("/api/datasets", params={"query": "DATASET_0601", "limit": 20}).json()
+        assert searched["total"] == 1
+        assert searched["items"][0]["id"] == "dataset-0601"

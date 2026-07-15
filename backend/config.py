@@ -6,6 +6,8 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Iterable
 
+from .paths import RootMapper
+
 
 def _default_base() -> Path:
     return Path(os.environ.get("ACADEMIC_VAULT_HOME", Path.cwd() / ".academic-vault"))
@@ -30,26 +32,37 @@ class Settings:
     quarantine_root: Path = _default_base() / "quarantine"
     catalog_path: Path = _default_base() / "catalog" / "academic_vault.sqlite3"
     model_path: Path = _default_base() / "models" / "modality-classifier.joblib"
+    export_root: Path | None = None
+    backup_root: Path | None = None
     auto_scan_seconds: float = 30
     stable_file_seconds: int = 5
-    auto_accept_threshold: float = 0.98
+    auto_accept_enabled: bool = False
     copy_on_accept: bool = True
+    machine_profile: str = "windows-default"
+    device_id: str | None = None
     config_file: Path | None = None
 
     def __post_init__(self) -> None:
+        data_root = Path(self.catalog_path).expanduser().resolve(strict=False).parent.parent
+        if self.export_root is None:
+            object.__setattr__(self, "export_root", data_root / "exports")
+        if self.backup_root is None:
+            object.__setattr__(self, "backup_root", data_root / "backups")
         if self.host not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("Academic Vault may only bind to a loopback address")
         if not (1 <= int(self.port) <= 65535):
             raise ValueError("port must be between 1 and 65535")
         if self.stable_file_seconds < 0 or self.auto_scan_seconds < 0:
             raise ValueError("scan intervals cannot be negative")
-        if not (0.0 <= self.auto_accept_threshold <= 1.0):
-            raise ValueError("auto_accept_threshold must be between 0 and 1")
+        if self.auto_accept_enabled:
+            raise ValueError("automatic acceptance is disabled; every Inbox dataset requires human review")
         roots = {
             "reference_root": self.reference_root,
             "inbox_root": self.inbox_root,
             "vault_root": self.vault_root,
             "quarantine_root": self.quarantine_root,
+            "export_root": self.export_root,
+            "backup_root": self.backup_root,
         }
         names = list(roots)
         for index, left_name in enumerate(names):
@@ -83,6 +96,8 @@ class Settings:
             "quarantine_root",
             "catalog_path",
             "model_path",
+            "export_root",
+            "backup_root",
             "config_file",
         }
         data: dict[str, Any] = {}
@@ -103,7 +118,13 @@ class Settings:
         return self.from_mapping(merged, base=self.config_file.parent if self.config_file else None)
 
     def ensure_runtime_directories(self) -> None:
-        for path in (self.inbox_root, self.vault_root, self.quarantine_root):
+        for path in (
+            self.inbox_root,
+            self.vault_root,
+            self.quarantine_root,
+            self.export_root,
+            self.backup_root,
+        ):
             Path(path).mkdir(parents=True, exist_ok=True)
         Path(self.catalog_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.model_path).parent.mkdir(parents=True, exist_ok=True)
@@ -119,12 +140,15 @@ class Settings:
                 "inboxPath": str(self.inbox_root),
                 "vaultPath": str(self.vault_root),
                 "catalogPath": str(self.catalog_path),
+                "exportPath": str(self.export_root),
+                "backupPath": str(self.backup_root),
                 "retainSource": True,
                 "verifySha256": True,
                 "autoScan": self.auto_scan_seconds > 0,
                 "scanInterval": self.auto_scan_seconds,
                 "model": "local-lightweight-v1" if Path(self.model_path).is_file() else "rules-only",
-                "confidenceThreshold": self.auto_accept_threshold,
+                "autoAcceptEnabled": False,
+                "reviewPolicy": "manual",
             }
         )
         return public
@@ -144,6 +168,18 @@ class Settings:
         if source == "inbox":
             return Path(self.inbox_root)
         raise ValueError("source must be 'reference' or 'inbox'")
+
+    def root_mappings(self) -> dict[str, Path]:
+        return {
+            "reference": Path(self.reference_root),
+            "inbox": Path(self.inbox_root),
+            "vault": Path(self.vault_root),
+            "quarantine": Path(self.quarantine_root),
+            "exports": Path(self.export_root),
+        }
+
+    def root_mapper(self) -> RootMapper:
+        return RootMapper(self.root_mappings())
 
     def assert_within(self, path: str | Path, roots: Iterable[str | Path], *, must_exist: bool = False) -> Path:
         candidate = Path(path).expanduser().resolve(strict=must_exist)

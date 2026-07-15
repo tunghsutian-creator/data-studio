@@ -27,7 +27,7 @@ function DetailField({ label, value }) {
   return <div className="detail-field"><span>{label}</span><strong>{value || "未识别"}</strong></div>;
 }
 
-export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast }) {
+export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast, actionsDisabled = false }) {
   if (!dataset) {
     return <div className="inspector-empty"><FileText size={36} /><strong>选择一个数据集</strong><span>查看文件组、分类证据和完整性状态。</span></div>;
   }
@@ -74,7 +74,7 @@ export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast
 
         <section className="inspector-section">
           <h2>建议规范名称</h2>
-          <div className="copy-field"><span title={dataset.canonicalName}>{dataset.canonicalName}</span><button className="icon-button" type="button" aria-label="修改建议名称" onClick={onEdit}><PencilSimple size={16} /></button></div>
+          <div className="copy-field"><span title={dataset.canonicalName}>{dataset.canonicalName}</span><button className="icon-button" type="button" aria-label="修改建议名称" disabled={actionsDisabled} onClick={onEdit}><PencilSimple size={16} /></button></div>
         </section>
 
         <section className="inspector-section">
@@ -107,11 +107,10 @@ export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast
       </div>
 
       <footer className="inspector-actions">
-        <button className="button button-primary" type="button" onClick={() => onAccept(dataset.id)}><Check size={17} weight="bold" />接受分类</button>
-        <button className="button button-secondary" type="button" onClick={onEdit}><PencilSimple size={17} />修改</button>
-        <button className="button button-secondary" type="button" onClick={() => onDefer(dataset.id)}><Pause size={17} />暂不处理</button>
+        <button className="button button-primary" type="button" disabled={actionsDisabled} onClick={() => onAccept(dataset.id)}><Check size={17} weight="bold" />接受分类</button>
+        <button className="button button-secondary" type="button" disabled={actionsDisabled} onClick={onEdit}><PencilSimple size={17} />修改</button>
+        <button className="button button-secondary" type="button" disabled={actionsDisabled} onClick={() => onDefer(dataset.id)}><Pause size={17} />暂不处理</button>
       </footer>
     </div>
   );
 }
-

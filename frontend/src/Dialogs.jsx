@@ -31,8 +31,7 @@ export function ImportDialog({ onClose, onStartScan }) {
     setStage("scanning");
     try {
       const response = await onStartScan(source);
-      await new Promise((resolve) => window.setTimeout(resolve, 650));
-      setResult(response || { detected: source === "inbox" ? 18 : 822, review: source === "inbox" ? 3 : 37 });
+      setResult(response || {});
       setStage("done");
     } catch {
       setStage("error");
@@ -46,7 +45,7 @@ export function ImportDialog({ onClose, onStartScan }) {
   return (
     <DialogFrame title="导入数据" description="选择一个本地入口。扫描只建立索引，不会移动、改名或删除源文件。" onClose={onClose} footer={footer}>
       {stage === "done" ? (
-        <div className="scan-result"><span><CheckCircle size={36} weight="duotone" /></span><h2>扫描完成</h2><p>检出 <strong>{result.detected || 18}</strong> 组数据，其中 <strong>{result.review || 3}</strong> 组需要人工审核。</p><div><ShieldCheck size={17} />所有源文件保持原位，入库前仍需确认。</div></div>
+        <div className="scan-result"><span><CheckCircle size={36} weight="duotone" /></span><h2>扫描任务已提交</h2><p>任务状态：<strong>{result.status || "QUEUED"}</strong>。处理结果可在“入库记录”中查看。</p><div><ShieldCheck size={17} />所有源文件保持原位，入库前仍需确认。</div></div>
       ) : (
         <>
           <div className="source-options" role="radiogroup" aria-label="扫描来源">
@@ -61,7 +60,7 @@ export function ImportDialog({ onClose, onStartScan }) {
   );
 }
 
-export function EditDatasetDialog({ dataset, onClose, onSave }) {
+export function EditDatasetDialog({ dataset, onClose, onSave, saving = false }) {
   const [draft, setDraft] = useState(dataset);
   useEffect(() => setDraft(dataset), [dataset]);
   if (!draft) return null;
@@ -71,7 +70,7 @@ export function EditDatasetDialog({ dataset, onClose, onSave }) {
       title="修改分类"
       description="修改仅更新目录中的分类决策；原始路径和文件内容保持不变。"
       onClose={onClose}
-      footer={<><button className="button button-secondary" type="button" onClick={onClose}>取消</button><button className="button button-primary" type="button" onClick={() => onSave(draft)}>保存修改</button></>}
+      footer={<><button className="button button-secondary" type="button" disabled={saving} onClick={onClose}>取消</button><button className="button button-primary" type="button" disabled={saving} onClick={() => onSave(draft)}>{saving ? "正在保存" : "保存修改"}</button></>}
     >
       <div className="edit-grid">
         <label className="form-field full"><span>建议规范名称</span><input autoFocus value={draft.canonicalName} onChange={(event) => set("canonicalName", event.target.value)} /></label>

@@ -56,8 +56,8 @@ function Sidebar({ activePage, onNavigate }) {
   );
 }
 
-function Topbar({ query, onQuery, searchRef, source, partialFallback, onImport }) {
-  const statusLabel = source === "api" ? "数据库已就绪" : source === "loading" ? "正在连接数据库" : "演示数据已就绪";
+function Topbar({ query, onQuery, searchRef, source, partialFailure, onImport, importDisabled }) {
+  const statusLabel = source === "api" ? (partialFailure ? "目录已就绪，部分状态不可用" : "数据库已就绪") : source === "loading" ? "正在连接数据库" : "数据库连接失败";
   return (
     <header className="topbar">
       <label className="global-search">
@@ -74,11 +74,11 @@ function Topbar({ query, onQuery, searchRef, source, partialFallback, onImport }
       </label>
 
       <div className="topbar-actions">
-        <div className="database-state" title={partialFallback ? "部分数据使用本地回退" : "所有数据来自本地数据库"}>
+        <div className="database-state" title={source === "api" ? "当前显示真实本地数据库数据" : "不会使用演示数据回退"}>
           <UserCircle size={22} />
-          <span><strong>本地模式</strong><small><i className={source === "seed" ? "status-dot warning" : "status-dot"} />{statusLabel}</small></span>
+          <span><strong>本地模式</strong><small><i className={source === "api" && !partialFailure ? "status-dot" : "status-dot warning"} />{statusLabel}</small></span>
         </div>
-        <button className="button button-primary import-button" type="button" aria-label="导入数据" onClick={onImport}>
+        <button className="button button-primary import-button" type="button" aria-label="导入数据" disabled={importDisabled} onClick={onImport}>
           <UploadSimple size={19} weight="bold" />
           <span>导入数据</span>
         </button>
@@ -94,8 +94,9 @@ export function AppShell({
   onQuery,
   searchRef,
   source,
-  partialFallback,
+  partialFailure,
   onImport,
+  importDisabled,
   inspector,
   inspectorOpen,
   onCloseInspector,
@@ -111,8 +112,9 @@ export function AppShell({
         onQuery={onQuery}
         searchRef={searchRef}
         source={source}
-        partialFallback={partialFallback}
+        partialFailure={partialFailure}
         onImport={onImport}
+        importDisabled={importDisabled}
       />
       <main id="workspace" className="workspace" tabIndex="-1">{children}</main>
       {inspector ? (

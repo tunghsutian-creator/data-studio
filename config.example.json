@@ -7,9 +7,10 @@
   "quarantine_root": "C:\\Research Data\\quarantine",
   "catalog_path": "C:\\Research Data\\catalog\\academic_vault.sqlite3",
   "model_path": "C:\\Research Data\\models\\modality-classifier.joblib",
+  "export_root": "C:\\Research Data\\exports",
+  "backup_root": "C:\\Research Data\\backups",
   "auto_scan_seconds": 30,
   "stable_file_seconds": 5,
-  "auto_accept_threshold": 0.98,
+  "auto_accept_enabled": false,
   "copy_on_accept": true
 }
-

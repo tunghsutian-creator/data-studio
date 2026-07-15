@@ -125,21 +125,38 @@ def accept_dataset(
             database.update_job(job_id, status="COMPLETED", current=0, total=0, message="Accepted without managed copy by configuration")
         return database.get_dataset(dataset_id) or dataset
 
+    mapper = settings.root_mapper()
     canonical = _safe_name(dataset.get("canonical_name") or dataset_id)
-    destination_dir = settings.assert_vault_path(Path(settings.vault_root) / f"{canonical}__{dataset_id[:8]}")
+    destination_relative = f"{canonical}__{dataset_id[:8]}"
+    destination_dir = mapper.resolve("vault", destination_relative)
     destination_dir.mkdir(parents=True, exist_ok=True)
     total = len(dataset["assets"])
     try:
         for index, asset in enumerate(dataset["assets"], start=1):
-            source = settings.assert_source_path(asset["original_path"], "inbox", must_exist=True)
+            if asset.get("path_state") != "VALID" or not asset.get("original_root_key") or not asset.get("original_relpath"):
+                raise RuntimeError(f"Asset path requires review before acceptance: {asset['id']}")
+            if asset["original_root_key"] != "inbox":
+                raise RuntimeError(f"Inbox acceptance cannot read root '{asset['original_root_key']}'")
+            source = mapper.resolve(
+                asset["original_root_key"], asset["original_relpath"], must_exist=True
+            )
             age = time.time_ns() - source.stat().st_mtime_ns
             if age < int(settings.stable_file_seconds * 1_000_000_000):
                 raise RuntimeError(f"Source is not stable yet: {source.name}")
             role = _safe_name(str(asset.get("role") or "PRIMARY"))
             suffix = _compound_suffix(str(asset.get("original_name") or source.name))
-            target = settings.assert_vault_path(destination_dir / f"{canonical}__{index:02d}_{role}{suffix}")
+            target_relative = f"{destination_relative}/{canonical}__{index:02d}_{role}{suffix}"
+            target = mapper.resolve("vault", target_relative)
             digest, managed = _copy_verified(source, target, asset.get("source_sha256") or asset.get("sha256"))
-            database.set_managed_asset(asset["id"], str(managed), digest, job_id)
+            managed_location = mapper.relativize(managed, allowed_keys={"vault"}, must_exist=True)
+            database.set_managed_asset(
+                asset["id"],
+                str(managed),
+                digest,
+                managed_location.root_key,
+                managed_location.relative_path,
+                job_id,
+            )
             if job_id:
                 database.update_job(job_id, current=index, total=total, message=f"Verified {index}/{total}")
         database.mark_resolution(dataset_id, "ACCEPTED", "COMMITTED", note)

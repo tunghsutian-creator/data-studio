@@ -6,7 +6,10 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
+
+from .migrations import MigrationReport, run_migrations
+from .paths import RootMapper
 
 
 def utc_now() -> str:
@@ -20,8 +23,23 @@ def _json(value: Any) -> str:
 class Database:
     """Small, thread-safe SQLite catalog using one connection per operation."""
 
-    def __init__(self, path: str | Path):
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        root_mappings: Mapping[str, str | Path] | None = None,
+        backup_root: str | Path | None = None,
+        library_name: str = "Academic Vault Windows Library",
+        machine_profile: str = "windows-default",
+        device_id: str | None = None,
+    ):
         self.path = Path(path).expanduser().resolve(strict=False)
+        self.root_mapper = RootMapper(root_mappings or {})
+        self.backup_root = Path(backup_root).expanduser().resolve(strict=False) if backup_root else None
+        self.library_name = library_name
+        self.machine_profile = machine_profile
+        self.device_id = device_id
+        self.last_migration_report: MigrationReport | None = None
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
@@ -45,129 +63,32 @@ class Database:
             connection.close()
 
     def initialize(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.last_migration_report = run_migrations(
+            self.path,
+            root_mappings=self.root_mapper.roots,
+            backup_root=self.backup_root,
+            library_name=self.library_name,
+            machine_profile=self.machine_profile,
+            device_id=self.device_id,
+        )
+
+    def metadata(self, key: str) -> str | None:
         with self.connect() as connection:
-            # DELETE is intentional: it is reliable on older SQLite builds and
-            # OneDrive-backed Windows folders where WAL sidecars are fragile.
-            connection.execute("PRAGMA journal_mode=DELETE")
-            connection.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS app_metadata (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
+            row = connection.execute("SELECT value FROM app_metadata WHERE key=?", (key,)).fetchone()
+        return str(row[0]) if row else None
 
-                CREATE TABLE IF NOT EXISTS datasets (
-                    id TEXT PRIMARY KEY,
-                    source_kind TEXT NOT NULL CHECK(source_kind IN ('reference','inbox')),
-                    group_key TEXT NOT NULL,
-                    source_root TEXT NOT NULL,
-                    canonical_name TEXT,
-                    workstream TEXT NOT NULL DEFAULT 'UNASSIGNED',
-                    material_state TEXT NOT NULL DEFAULT 'UNKNOWN',
-                    modality TEXT NOT NULL DEFAULT 'UNKNOWN',
-                    data_level TEXT NOT NULL DEFAULT 'UNKNOWN',
-                    sample_code TEXT,
-                    experiment_date TEXT,
-                    confidence REAL NOT NULL DEFAULT 0.0,
-                    classification_method TEXT NOT NULL DEFAULT 'unknown',
-                    conflict INTEGER NOT NULL DEFAULT 0,
-                    status TEXT NOT NULL DEFAULT 'REVIEW',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(source_kind, group_key)
-                );
+    def schema_version(self) -> int:
+        return int(self.metadata("schema_version") or 0)
 
-                CREATE TABLE IF NOT EXISTS assets (
-                    id TEXT PRIMARY KEY,
-                    dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-                    original_path TEXT NOT NULL UNIQUE,
-                    managed_path TEXT,
-                    original_name TEXT NOT NULL,
-                    extension TEXT NOT NULL DEFAULT '',
-                    size_bytes INTEGER NOT NULL DEFAULT 0,
-                    modified_at TEXT,
-                    mtime_ns INTEGER,
-                    sha256 TEXT,
-                    source_sha256 TEXT,
-                    managed_sha256 TEXT,
-                    role TEXT NOT NULL DEFAULT 'PRIMARY',
-                    mime_type TEXT,
-                    hash_state TEXT NOT NULL DEFAULT 'UNVERIFIED',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS classification_decisions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-                    predicted_label TEXT,
-                    proposed_metadata_json TEXT NOT NULL DEFAULT '{}',
-                    confidence REAL NOT NULL DEFAULT 0.0,
-                    method TEXT NOT NULL DEFAULT 'unknown',
-                    evidence_json TEXT NOT NULL DEFAULT '[]',
-                    conflict INTEGER NOT NULL DEFAULT 0,
-                    resolution TEXT NOT NULL DEFAULT 'PREDICTED',
-                    note TEXT,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS ingest_jobs (
-                    id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL,
-                    source TEXT,
-                    status TEXT NOT NULL,
-                    progress_current INTEGER NOT NULL DEFAULT 0,
-                    progress_total INTEGER NOT NULL DEFAULT 0,
-                    message TEXT,
-                    error TEXT,
-                    created_at TEXT NOT NULL,
-                    started_at TEXT,
-                    finished_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS operation_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    dataset_id TEXT REFERENCES datasets(id) ON DELETE CASCADE,
-                    job_id TEXT REFERENCES ingest_jobs(id) ON DELETE SET NULL,
-                    action TEXT NOT NULL,
-                    detail_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS rules (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    pattern TEXT NOT NULL,
-                    label TEXT NOT NULL,
-                    priority INTEGER NOT NULL DEFAULT 100,
-                    enabled INTEGER NOT NULL DEFAULT 1,
-                    version INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_datasets_status ON datasets(status);
-                CREATE INDEX IF NOT EXISTS idx_datasets_modality ON datasets(modality);
-                CREATE INDEX IF NOT EXISTS idx_datasets_updated ON datasets(updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_assets_dataset ON assets(dataset_id);
-                CREATE INDEX IF NOT EXISTS idx_assets_extension ON assets(extension);
-                CREATE INDEX IF NOT EXISTS idx_decisions_dataset ON classification_decisions(dataset_id, id DESC);
-                CREATE INDEX IF NOT EXISTS idx_operations_dataset ON operation_log(dataset_id, id DESC);
-                """
-            )
-            asset_columns = {row[1] for row in connection.execute("PRAGMA table_info(assets)")}
-            if "source_sha256" not in asset_columns:
-                connection.execute("ALTER TABLE assets ADD COLUMN source_sha256 TEXT")
-            if "managed_sha256" not in asset_columns:
-                connection.execute("ALTER TABLE assets ADD COLUMN managed_sha256 TEXT")
-            connection.execute("UPDATE assets SET source_sha256=COALESCE(source_sha256,sha256)")
-            connection.execute(
-                "UPDATE assets SET managed_sha256=COALESCE(managed_sha256,sha256) WHERE managed_path IS NOT NULL AND hash_state='VERIFIED'"
-            )
-            connection.execute(
-                "INSERT OR REPLACE INTO app_metadata(key,value) VALUES('schema_version','2')"
-            )
+    def library_id(self, connection: sqlite3.Connection | None = None) -> str:
+        if connection is not None:
+            row = connection.execute("SELECT value FROM app_metadata WHERE key='library_id'").fetchone()
+            if row:
+                return str(row[0])
+        value = self.metadata("library_id")
+        if not value:
+            raise RuntimeError("catalog has no stable library identity")
+        return value
 
     def journal_mode(self) -> str:
         with self.connect() as connection:
@@ -291,9 +212,18 @@ class Database:
         requires_review = modality == "UNKNOWN" or bool(conflict) or confidence < 0.6
         initial_status = "INDEXED" if source_kind == "reference" and not requires_review else "REVIEW"
         path_obj = Path(path)
+        if source_kind in self.root_mapper.roots:
+            location = self.root_mapper.relativize(
+                path_obj, allowed_keys={source_kind}, must_exist=False
+            )
+        else:
+            location = RootMapper({source_kind: source_root}).relativize(
+                path_obj, allowed_keys={source_kind}, must_exist=False
+            )
 
-        protected_statuses = {"REVIEWED", "ACCEPTED", "MANAGED", "COMMITTED", "DEFERRED", "STALE"}
+        protected_statuses = {"REVIEWED", "ACCEPTED", "MANAGED", "COMMITTED", "DEFERRED", "STALE", "PATH_REVIEW"}
         with self.transaction() as connection:
+            library_id = self.library_id(connection)
             existing_asset = connection.execute(
                 """
                 SELECT a.*,d.status AS dataset_status
@@ -323,7 +253,7 @@ class Database:
                         UPDATE datasets SET source_root=?, canonical_name=?, workstream=?, material_state=?, modality=?,
                             data_level=?, sample_code=COALESCE(?,sample_code),
                             experiment_date=COALESCE(?,experiment_date), confidence=?,
-                            classification_method=?, conflict=?, status=?, updated_at=?
+                            classification_method=?, conflict=?, status=?, revision=revision+1, updated_at=?
                         WHERE id=?
                         """,
                         (
@@ -338,13 +268,14 @@ class Database:
                     INSERT INTO datasets(
                         id,source_kind,group_key,source_root,canonical_name,workstream,
                         material_state,modality,data_level,sample_code,experiment_date,
-                        confidence,classification_method,conflict,status,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        confidence,classification_method,conflict,status,created_at,updated_at,
+                        library_id,revision
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         dataset_id, source_kind, group_key, source_root, canonical_name,
                         workstream, material, modality, lifecycle, sample, experiment_date,
-                        confidence, method, conflict, initial_status, now, now,
+                        confidence, method, conflict, initial_status, now, now, library_id, 1,
                     ),
                 )
 
@@ -364,17 +295,18 @@ class Database:
                     """
                     UPDATE assets SET dataset_id=?,original_name=?,extension=?,size_bytes=?,
                         modified_at=?,mtime_ns=?,sha256=?,source_sha256=?,role=?,mime_type=?,hash_state=?,updated_at=?
+                        ,original_root_key=?,original_relpath=?,path_state='VALID'
                     WHERE id=?
                     """,
                     (
                         dataset_id, path_obj.name, path_obj.suffix.lower(), size_bytes,
                         modified_at, mtime_ns, display_hash, sha256, role, mime_type,
-                        hash_state, now, existing_asset["id"],
+                        hash_state, now, location.root_key, location.relative_path, existing_asset["id"],
                     ),
                 )
                 if source_changed and row and row["status"] in protected_statuses:
                     connection.execute(
-                        "UPDATE datasets SET status='STALE',conflict=1,updated_at=? WHERE id=?",
+                        "UPDATE datasets SET status='STALE',conflict=1,revision=revision+1,updated_at=? WHERE id=?",
                         (now, dataset_id),
                     )
                     connection.execute(
@@ -399,13 +331,15 @@ class Database:
                     """
                     INSERT INTO assets(
                         id,dataset_id,original_path,original_name,extension,size_bytes,
-                        modified_at,mtime_ns,sha256,source_sha256,role,mime_type,hash_state,created_at,updated_at
-                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        modified_at,mtime_ns,sha256,source_sha256,role,mime_type,hash_state,created_at,updated_at,
+                        original_root_key,original_relpath,path_state
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         str(uuid.uuid4()), dataset_id, path, path_obj.name,
                         path_obj.suffix.lower(), size_bytes, modified_at, mtime_ns,
                         sha256, sha256, role, mime_type, "SOURCE_HASHED", now, now,
+                        location.root_key, location.relative_path, "VALID",
                     ),
                 )
             connection.execute(
@@ -445,15 +379,17 @@ class Database:
         extension: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
+        sort: str = "updated_at",
+        order: str = "desc",
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, Any]:
         where: list[str] = []
         params: list[Any] = []
         if search:
-            where.append("(d.canonical_name LIKE ? OR d.sample_code LIKE ? OR a.original_name LIKE ?)")
+            where.append("(d.canonical_name LIKE ? OR d.sample_code LIKE ? OR d.workstream LIKE ? OR a.original_name LIKE ? OR a.sha256 LIKE ? OR a.source_sha256 LIKE ?)")
             token = f"%{search}%"
-            params.extend((token, token, token))
+            params.extend((token, token, token, token, token, token))
         for column, value in (("d.workstream", workstream), ("d.material_state", material_state), ("d.modality", modality), ("d.status", status)):
             if value:
                 where.append(f"{column}=?")
@@ -469,6 +405,21 @@ class Database:
             params.append(date_to)
         clause = "WHERE " + " AND ".join(where) if where else ""
         base = f"FROM datasets d LEFT JOIN assets a ON a.dataset_id=d.id {clause}"
+        sort_columns = {
+            "updated_at": "d.updated_at",
+            "created_at": "d.created_at",
+            "name": "d.canonical_name",
+            "canonical_name": "d.canonical_name",
+            "confidence": "d.confidence",
+            "status": "d.status",
+            "modality": "d.modality",
+            "file_count": "file_count",
+            "size_bytes": "size_bytes",
+        }
+        sort_sql = sort_columns.get(sort, "d.updated_at")
+        order_sql = "ASC" if order.lower() == "asc" else "DESC"
+        actual_limit = max(1, min(limit, 200))
+        actual_offset = max(0, offset)
         with self.connect() as connection:
             total = int(connection.execute(f"SELECT COUNT(DISTINCT d.id) {base}", params).fetchone()[0])
             rows = connection.execute(
@@ -476,11 +427,18 @@ class Database:
                 SELECT d.*,COUNT(DISTINCT a.id) AS file_count,COALESCE(SUM(a.size_bytes),0) AS size_bytes,
                        MIN(a.original_path) AS original_path,GROUP_CONCAT(DISTINCT a.extension) AS extensions
                 {base}
-                GROUP BY d.id ORDER BY d.updated_at DESC LIMIT ? OFFSET ?
+                GROUP BY d.id ORDER BY {sort_sql} {order_sql},d.id ASC LIMIT ? OFFSET ?
                 """,
-                (*params, max(1, min(limit, 500)), max(0, offset)),
+                (*params, actual_limit, actual_offset),
             ).fetchall()
-        return {"items": [self._dataset_dict(row) for row in rows], "total": total, "limit": limit, "offset": offset}
+        return {
+            "items": [self._dataset_dict(row) for row in rows],
+            "total": total,
+            "limit": actual_limit,
+            "offset": actual_offset,
+            "sort": sort,
+            "order": order_sql.lower(),
+        }
 
     def get_dataset(self, dataset_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
@@ -539,9 +497,14 @@ class Database:
             if not exists:
                 return None
             if updates:
-                updates.extend(("status='REVIEWED'", "updated_at=?"))
+                updates.extend(("status='REVIEWED'", "revision=revision+1", "updated_at=?"))
                 values.extend((now, dataset_id))
                 connection.execute(f"UPDATE datasets SET {', '.join(updates)} WHERE id=?", values)
+            else:
+                connection.execute(
+                    "UPDATE datasets SET revision=revision+1,updated_at=? WHERE id=?",
+                    (now, dataset_id),
+                )
             connection.execute(
                 """
                 INSERT INTO classification_decisions(dataset_id,proposed_metadata_json,resolution,note,created_at)
@@ -559,7 +522,7 @@ class Database:
         now = utc_now()
         with self.transaction() as connection:
             cursor = connection.execute(
-                "UPDATE datasets SET status=?,updated_at=? WHERE id=?", (status, now, dataset_id)
+                "UPDATE datasets SET status=?,revision=revision+1,updated_at=? WHERE id=?", (status, now, dataset_id)
             )
             if cursor.rowcount == 0:
                 return False
@@ -573,15 +536,31 @@ class Database:
             )
         return True
 
-    def set_managed_asset(self, asset_id: str, managed_path: str, sha256: str, job_id: str | None = None) -> None:
+    def set_managed_asset(
+        self,
+        asset_id: str,
+        managed_path: str,
+        sha256: str,
+        managed_root_key: str,
+        managed_relpath: str,
+        job_id: str | None = None,
+    ) -> None:
         now = utc_now()
         with self.transaction() as connection:
             row = connection.execute("SELECT dataset_id,managed_path,managed_sha256 FROM assets WHERE id=?", (asset_id,)).fetchone()
             if not row:
                 raise KeyError(asset_id)
             connection.execute(
-                "UPDATE assets SET managed_path=?,sha256=?,managed_sha256=?,hash_state='VERIFIED',updated_at=? WHERE id=?",
-                (managed_path, sha256, sha256, now, asset_id),
+                """
+                UPDATE assets SET managed_path=?,sha256=?,managed_sha256=?,hash_state='VERIFIED',
+                    managed_root_key=?,managed_relpath=?,path_state='VALID',updated_at=?
+                WHERE id=?
+                """,
+                (managed_path, sha256, sha256, managed_root_key, managed_relpath, now, asset_id),
+            )
+            connection.execute(
+                "UPDATE datasets SET revision=revision+1,updated_at=? WHERE id=?",
+                (now, row["dataset_id"]),
             )
             connection.execute(
                 "INSERT INTO operation_log(dataset_id,job_id,action,detail_json,created_at) VALUES(?,?,?,?,?)",

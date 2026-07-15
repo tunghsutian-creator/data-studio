@@ -24,6 +24,16 @@ from .taxonomy import normalize_modality
 logger = logging.getLogger(__name__)
 
 
+def _database_for(settings: Settings) -> Database:
+    return Database(
+        settings.catalog_path,
+        root_mappings=settings.root_mappings(),
+        backup_root=settings.backup_root,
+        machine_profile=settings.machine_profile,
+        device_id=settings.device_id,
+    )
+
+
 def _database(request: Request) -> Database:
     return request.app.state.database
 
@@ -141,7 +151,7 @@ async def _auto_scan_loop(app: FastAPI) -> None:
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or load_settings()
-    database = Database(configured.catalog_path)
+    database = _database_for(configured)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -204,6 +214,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "local_only": True,
             "catalog": str(db.path),
             "journal_mode": db.journal_mode(),
+            "schema_version": db.schema_version(),
+            "library_id": db.library_id(),
             "model_loaded": bool(getattr(request.app.state, "model_loaded", False)),
         }
 
@@ -224,10 +236,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "inboxPath": "inbox_root",
                 "vaultPath": "vault_root",
                 "catalogPath": "catalog_path",
-                "confidenceThreshold": "auto_accept_threshold",
+                "exportPath": "export_root",
+                "backupPath": "backup_root",
             }.items():
                 if ui_name in raw:
                     raw[setting_name] = raw[ui_name]
+            if raw.get("auto_accept_enabled") or raw.get("autoAcceptEnabled"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Automatic acceptance is disabled; every Inbox dataset requires human review",
+                )
+            if "auto_accept_threshold" in raw or "confidenceThreshold" in raw:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Confidence-based automatic acceptance has been removed; use the manual review policy",
+                )
             if "scanInterval" in raw:
                 interval_value = raw["scanInterval"]
                 if isinstance(interval_value, (int, float)):
@@ -242,7 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raw["auto_scan_seconds"] = 900
             updated = previous.updated(raw)
             updated.ensure_runtime_directories()
-            replacement = Database(updated.catalog_path)
+            replacement = _database_for(updated)
             replacement.initialize()
             replacement.recover_interrupted_jobs()
             from . import classifier
@@ -272,6 +295,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def datasets(
         request: Request,
         search: str | None = None,
+        query: str | None = None,
         workstream: str | None = None,
         material_state: str | None = None,
         modality: str | None = None,
@@ -279,11 +303,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         extension: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
-        limit: int = Query(100, ge=1, le=500),
+        sort: str = "updated_at",
+        order: str = "desc",
+        limit: int = Query(50, ge=1, le=200),
         offset: int = Query(0, ge=0),
     ) -> dict[str, Any]:
         return _database(request).list_datasets(
-            search=search,
+            search=query or search,
             workstream=workstream,
             material_state=material_state,
             modality=modality,
@@ -291,6 +317,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             extension=extension,
             date_from=date_from,
             date_to=date_to,
+            sort=sort,
+            order=order,
             limit=limit,
             offset=offset,
         )

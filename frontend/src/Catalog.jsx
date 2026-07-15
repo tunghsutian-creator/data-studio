@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import {
   Archive,
   ArrowCounterClockwise,
@@ -121,20 +121,27 @@ function FiltersBar({ filters, options, onChange, onReset }) {
   );
 }
 
-export function DataTable({ rows, total, selectedId, onSelect, compact = false }) {
-  const [pageSize, setPageSize] = useState(20);
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  const safePage = Math.min(currentPage, pageCount);
-  const pageRows = useMemo(() => {
-    const start = (safePage - 1) * pageSize;
-    return rows.slice(start, start + pageSize);
-  }, [pageSize, rows, safePage]);
+export function DataTable({
+  rows,
+  total,
+  selectedId,
+  onSelect,
+  page = 1,
+  pageSize = 20,
+  onPageChange = () => undefined,
+  onPageSizeChange = () => undefined,
+  loading = false,
+  error = "",
+  onRetry = () => undefined,
+  compact = false,
+}) {
+  const pageCount = Math.max(1, Math.ceil(Number(total || 0) / pageSize));
+  const safePage = Math.min(page, pageCount);
   const pageTokens = useMemo(() => paginationTokens(safePage, pageCount), [pageCount, safePage]);
 
   useEffect(() => {
-    setCurrentPage(1);
-  }, [rows]);
+    if (safePage !== page) onPageChange(safePage);
+  }, [onPageChange, page, safePage]);
 
   return (
     <section className={compact ? "table-panel compact" : "table-panel"} aria-label="数据集列表">
@@ -154,7 +161,7 @@ export function DataTable({ rows, total, selectedId, onSelect, compact = false }
             </tr>
           </thead>
           <tbody>
-            {pageRows.length ? pageRows.map((row) => {
+            {rows.length ? rows.map((row) => {
               const Icon = modalityIcons[row.modality] || FileText;
               const selected = row.id === selectedId;
               return (
@@ -183,7 +190,7 @@ export function DataTable({ rows, total, selectedId, onSelect, compact = false }
                 </tr>
               );
             }) : (
-              <tr><td colSpan="9"><div className="empty-table"><FileMagnifyingGlass size={30} /><strong>没有匹配的数据集</strong><span>调整筛选条件或搜索关键词后再试。</span></div></td></tr>
+              <tr><td colSpan="9"><div className="empty-table"><FileMagnifyingGlass size={30} /><strong>{loading ? "正在加载本地目录" : error ? "无法读取本地目录" : "没有匹配的数据集"}</strong><span>{loading ? "正在等待后端返回当前页。" : error || "调整筛选条件或搜索关键词后再试。"}</span>{error ? <button className="button button-secondary" type="button" onClick={onRetry}>重试</button> : null}</div></td></tr>
             )}
           </tbody>
         </table>
@@ -191,7 +198,7 @@ export function DataTable({ rows, total, selectedId, onSelect, compact = false }
       <footer className="table-footer">
         <span>共 {Number(total ?? rows.length).toLocaleString("zh-CN")} 条</span>
         <nav aria-label="数据表分页">
-          <button type="button" aria-label="上一页" disabled={safePage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}><CaretLeft size={16} /></button>
+          <button type="button" aria-label="上一页" disabled={safePage === 1 || loading} onClick={() => onPageChange(Math.max(1, safePage - 1))}><CaretLeft size={16} /></button>
           {pageTokens.map((token) => typeof token === "number" ? (
             <button
               className={token === safePage ? "is-current" : ""}
@@ -199,16 +206,16 @@ export function DataTable({ rows, total, selectedId, onSelect, compact = false }
               key={token}
               aria-current={token === safePage ? "page" : undefined}
               aria-label={"第 " + token + " 页"}
-              onClick={() => setCurrentPage(token)}
+              disabled={loading}
+              onClick={() => onPageChange(token)}
             >{token}</button>
           ) : <span key={token} aria-hidden="true">…</span>)}
-          <button type="button" aria-label="下一页" disabled={safePage === pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}><CaretRight size={16} /></button>
+          <button type="button" aria-label="下一页" disabled={safePage === pageCount || loading} onClick={() => onPageChange(Math.min(pageCount, safePage + 1))}><CaretRight size={16} /></button>
           <select
             aria-label="每页条数"
             value={pageSize}
             onChange={(event) => {
-              setPageSize(Number(event.target.value));
-              setCurrentPage(1);
+              onPageSizeChange(Number(event.target.value));
             }}
           ><option value="20">20 条/页</option><option value="50">50 条/页</option></select>
         </nav>
@@ -244,12 +251,12 @@ function PipelineFooter() {
   );
 }
 
-export function DatabasePage({ summary, rows, total, selectedId, onSelect, filters, options, onFilter, onReset }) {
+export function DatabasePage({ summary, filters, options, onFilter, onReset, ...tableProps }) {
   return (
     <div className="database-page">
       <SummaryStrip summary={summary} />
       <FiltersBar filters={filters} options={options} onChange={onFilter} onReset={onReset} />
-      <DataTable rows={rows} total={total} selectedId={selectedId} onSelect={onSelect} />
+      <DataTable {...tableProps} />
       <PipelineFooter />
     </div>
   );

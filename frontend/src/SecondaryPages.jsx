@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Check,
   ClockCounterClockwise,
@@ -23,33 +23,15 @@ function PageHeader({ eyebrow, title, description, action }) {
   );
 }
 
-export function ReviewPage({ rows, selectedId, onSelect }) {
-  const [tab, setTab] = useState("全部");
-  const needsReview = (item) => item.statusCode === "review" || item.statusCode === "deferred";
-  const counts = useMemo(() => ({
-    全部: rows.filter(needsReview).length,
-    中置信度: rows.filter((item) => item.statusCode === "review" && item.confidence >= 0.55 && item.confidence < 0.82).length,
-    低置信度: rows.filter((item) => item.statusCode === "review" && item.confidence < 0.55).length,
-    暂缓: rows.filter((item) => item.statusCode === "deferred").length,
-  }), [rows]);
-  const visible = rows.filter((item) => {
-    if (tab === "暂缓") return item.statusCode === "deferred";
-    if (!needsReview(item)) return false;
-    if (tab === "中置信度") return item.confidence >= 0.55 && item.confidence < 0.82;
-    if (tab === "低置信度") return item.confidence < 0.55;
-    return true;
-  });
+export function ReviewPage({ rows, total, ...tableProps }) {
   return (
     <div className="secondary-page review-page">
       <PageHeader eyebrow="人工决策队列" title="待审核" description="模型只提供可解释建议；模糊分类必须由你确认后才能进入受管目录。" />
       <section className="review-overview">
-        <div><WarningCircle size={22} /><span><strong>{counts.全部}</strong> 条待处理</span></div>
+        <div><WarningCircle size={22} /><span><strong>{Number(total || 0).toLocaleString("zh-CN")}</strong> 条待处理</span></div>
         <p>建议优先处理低置信度和存在文件组冲突的数据集。</p>
       </section>
-      <div className="segmented-tabs" role="tablist" aria-label="待审核筛选">
-        {Object.entries(counts).map(([label, count]) => <button key={label} type="button" className={tab === label ? "is-active" : ""} role="tab" aria-selected={tab === label} onClick={() => setTab(label)}>{label}<span>{count}</span></button>)}
-      </div>
-      <DataTable rows={visible} total={visible.length} selectedId={selectedId} onSelect={onSelect} compact />
+      <DataTable rows={rows} total={total} {...tableProps} compact />
     </div>
   );
 }
@@ -117,7 +99,7 @@ function ToggleRow({ label, description, checked, onChange }) {
   return <label className="toggle-row"><span><strong>{label}</strong><small>{description}</small></span><span className="switch"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /><i aria-hidden="true" /></span></label>;
 }
 
-export function SettingsPage({ config, onSave }) {
+export function SettingsPage({ config, onSave, saving = false }) {
   const [draft, setDraft] = useState(config);
   useEffect(() => setDraft(config), [config]);
   const update = (field, value) => setDraft((current) => ({ ...current, [field]: value }));
@@ -127,11 +109,11 @@ export function SettingsPage({ config, onSave }) {
         eyebrow="本地工作站配置"
         title="设置"
         description="所有路径、规则和模型均保存在本机；系统仅绑定 127.0.0.1。"
-        action={<button className="button button-primary" type="button" onClick={() => onSave(draft)}><Check size={18} />保存设置</button>}
+        action={<button className="button button-primary" type="button" disabled={saving} onClick={() => onSave(draft)}><Check size={18} />{saving ? "正在保存" : "保存设置"}</button>}
       />
       <div className="settings-grid">
         <SettingsSection icon={FolderOpen} title="本地路径" description="参考库只读，Inbox 是新数据入口，Vault 保存批准后的受管副本。">
-          {[['referencePath','参考库'],['inboxPath','Inbox'],['vaultPath','Vault'],['catalogPath','目录数据库']].map(([field, label]) => <label className="settings-field" key={field}><span>{label}</span><input value={draft[field] || ""} onChange={(event) => update(field, event.target.value)} /></label>)}
+          {[['referencePath','参考库'],['inboxPath','Inbox'],['vaultPath','Vault'],['catalogPath','目录数据库'],['exportPath','导出目录'],['backupPath','备份目录']].map(([field, label]) => <label className="settings-field" key={field}><span>{label}</span><input value={draft[field] || ""} onChange={(event) => update(field, event.target.value)} /></label>)}
         </SettingsSection>
         <SettingsSection icon={ShieldCheck} title="安全与校验" description="这些保护项默认开启，避免原始科研数据被覆盖或误删。">
           <ToggleRow label="保留源文件" description="入库后不移动或删除 Inbox 中的原文件。" checked={Boolean(draft.retainSource)} onChange={(value) => update('retainSource', value)} />
@@ -143,8 +125,7 @@ export function SettingsPage({ config, onSave }) {
         </SettingsSection>
         <SettingsSection icon={SlidersHorizontal} title="本地分类模型" description="模型仅辅助排序，不拥有移动、覆盖或删除文件的权限。">
           <label className="settings-field"><span>模型</span><select value={draft.model || 'local-lightweight-v1'} onChange={(event) => update('model', event.target.value)}><option value="local-lightweight-v1">本地轻量分类器 v1</option><option value="rules-only">仅使用规则</option></select></label>
-          <label className="range-field"><span><b>自动接受阈值</b><strong>{Math.round((draft.confidenceThreshold || 0.82) * 100)}%</strong></span><input type="range" min="0.6" max="0.98" step="0.01" value={draft.confidenceThreshold || 0.82} onChange={(event) => update('confidenceThreshold', Number(event.target.value))} /></label>
-          <p className="settings-note"><Info size={16} />低于阈值的数据始终进入人工审核；即使高于阈值，原始文件也不会被删除。</p>
+          <p className="settings-note"><Info size={16} />当前为固定人工审核策略：扫描和模型只生成建议，任何置信度都不会自动接受或写入受管 Vault。</p>
         </SettingsSection>
       </div>
       <footer className="settings-security"><LockKey size={17} />当前服务仅监听本机地址，未配置任何云端 API。</footer>

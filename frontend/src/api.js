@@ -1,14 +1,28 @@
-import {
-  filterOptions,
-  seedConfig,
-  seedDatasets,
-  seedJobs,
-  seedRules,
-  seedSummary,
-} from "./seed.js";
-
 const API_BASE = "/api";
 const REQUEST_TIMEOUT = 10000;
+const emptySummary = {
+  datasets: 0,
+  review: 0,
+  storage: "—",
+  high: 0,
+  medium: 0,
+  low: 0,
+  ingestedThisMonth: 0,
+};
+const emptyFilters = {
+  projects: ["全部项目"],
+  materialStates: ["全部"],
+  modalities: ["全部"],
+  formats: ["全部"],
+};
+const emptyConfig = {
+  retainSource: true,
+  verifySha256: true,
+  autoScan: false,
+  model: "rules-only",
+  auto_accept_enabled: false,
+  reviewPolicy: "manual",
+};
 
 function getPayloadItems(payload) {
   if (Array.isArray(payload)) return payload;
@@ -141,8 +155,10 @@ export function normalizeDataset(item, index = 0) {
   };
 }
 
-async function request(path, { timeoutMs = REQUEST_TIMEOUT, ...options } = {}) {
+async function request(path, { timeoutMs = REQUEST_TIMEOUT, signal: externalSignal, ...options } = {}) {
   const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+  externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(API_BASE + path, {
@@ -168,6 +184,7 @@ async function request(path, { timeoutMs = REQUEST_TIMEOUT, ...options } = {}) {
     return await response.json();
   } finally {
     window.clearTimeout(timer);
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
 }
 
@@ -181,26 +198,40 @@ async function settle(path, fallback, transform = (value) => value) {
 }
 
 export async function loadWorkspace() {
-  const [summary, filters, datasets, jobs, rules, config] = await Promise.all([
-    settle("/summary", seedSummary),
-    settle("/filters", filterOptions, normalizeFilters),
-    settle("/datasets?limit=500&offset=0", seedDatasets, (payload) =>
-      getPayloadItems(payload).map(normalizeDataset),
-    ),
-    settle("/jobs", seedJobs, getPayloadItems),
-    settle("/rules", seedRules, (payload) => getPayloadItems(payload).map(normalizeRule)),
-    settle("/config", seedConfig),
+  const [summary, filters, jobs, rules, config] = await Promise.all([
+    settle("/summary", emptySummary),
+    settle("/filters", emptyFilters, normalizeFilters),
+    settle("/jobs", [], getPayloadItems),
+    settle("/rules", [], (payload) => getPayloadItems(payload).map(normalizeRule)),
+    settle("/config", emptyConfig),
   ]);
+  const results = [summary, filters, jobs, rules, config];
   return {
-    summary: { ...seedSummary, ...summary.value },
-    filters: { ...filterOptions, ...filters.value },
-    datasets: datasets.value.length ? datasets.value : seedDatasets,
-    jobs: jobs.value.length ? jobs.value : seedJobs,
-    rules: rules.value.length ? rules.value : seedRules,
-    config: { ...seedConfig, ...config.value },
-    source: datasets.live ? "api" : "seed",
-    partialFallback: ![summary, filters, datasets, jobs, rules, config].every((item) => item.live),
+    summary: { ...emptySummary, ...summary.value },
+    filters: { ...emptyFilters, ...filters.value },
+    jobs: jobs.value,
+    rules: rules.value,
+    config: { ...emptyConfig, ...config.value },
+    partialFailure: !results.every((item) => item.live),
   };
+}
+
+export async function loadCatalogPage(params, { signal } = {}) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  });
+  const payload = await request("/datasets?" + query.toString(), { signal });
+  return {
+    items: getPayloadItems(payload).map(normalizeDataset),
+    total: Number(payload?.total || 0),
+    limit: Number(payload?.limit || params.limit || 20),
+    offset: Number(payload?.offset || 0),
+  };
+}
+
+export async function loadSummary() {
+  return request("/summary");
 }
 
 export async function loadDatasetDetail(id) {
@@ -209,18 +240,20 @@ export async function loadDatasetDetail(id) {
 }
 
 export async function acceptDataset(id) {
-  return request("/datasets/" + encodeURIComponent(id) + "/accept", {
+  const payload = await request("/datasets/" + encodeURIComponent(id) + "/accept", {
     method: "POST",
     timeoutMs: 10 * 60 * 1000,
   });
+  return normalizeDataset(payload);
 }
 
 export async function deferDataset(id) {
-  return request("/datasets/" + encodeURIComponent(id) + "/defer", { method: "POST" });
+  const payload = await request("/datasets/" + encodeURIComponent(id) + "/defer", { method: "POST" });
+  return normalizeDataset(payload);
 }
 
 export async function updateDataset(id, changes) {
-  return request("/datasets/" + encodeURIComponent(id), {
+  const payload = await request("/datasets/" + encodeURIComponent(id), {
     method: "PUT",
     body: JSON.stringify({
       canonical_name: changes.canonicalName,
@@ -230,6 +263,7 @@ export async function updateDataset(id, changes) {
       sample_code: changes.sample,
     }),
   });
+  return normalizeDataset(payload);
 }
 
 export async function startScan(source) {

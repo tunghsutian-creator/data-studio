@@ -8,21 +8,15 @@ import {
   acceptDataset,
   createRule,
   deferDataset,
+  loadCatalogPage,
   loadDatasetDetail,
+  loadSummary,
   loadWorkspace,
   patchRule,
   saveConfig,
   startScan,
   updateDataset,
 } from "./api.js";
-import {
-  filterOptions as seedFilterOptions,
-  seedConfig,
-  seedDatasets,
-  seedJobs,
-  seedRules,
-  seedSummary,
-} from "./seed.js";
 
 const routes = new Set(["database", "review", "ingest", "rules", "settings"]);
 const defaultFilters = {
@@ -33,67 +27,95 @@ const defaultFilters = {
   dateTo: "",
   format: "全部",
 };
+const emptySummary = { datasets: 0, review: 0, storage: "—", high: 0, medium: 0, low: 0, ingestedThisMonth: 0 };
+const emptyOptions = { projects: ["全部项目"], materialStates: ["全部"], modalities: ["全部"], formats: ["全部"] };
+const emptyConfig = { retainSource: true, verifySha256: true, autoScan: false, model: "rules-only", reviewPolicy: "manual" };
 
 const modalityLabels = {
-  SEM: "SEM",
-  TENSILE: "拉伸",
-  FTIR: "FTIR",
-  RHEOLOGY: "流变",
-  IMPACT: "冲击",
-  GPC: "GPC",
-  TORQUE: "扭矩",
-  OPTICAL: "光学图像",
-  UNKNOWN: "未知",
+  SEM: "SEM", TENSILE: "拉伸", FTIR: "FTIR", RHEOLOGY: "流变", IMPACT: "冲击",
+  GPC: "GPC", TORQUE: "扭矩", OPTICAL: "光学图像", SIMULATION: "模拟", UNKNOWN: "未知",
 };
 const materialLabels = { VIRGIN: "干燥态", RECYCLED: "回收料", UNKNOWN: "未知" };
+const workstreamLabels = {
+  REFERENCE: "参考资料", PA_ADR_RECYCLE: "PA ADR 回收料", D_PA: "D-PA", UDC: "UDC",
+  VITRIMER: "VITRIMER", UNASSIGNED: "未分类项目", UNKNOWN: "未知项目",
+};
+const reverseModality = Object.fromEntries(Object.entries(modalityLabels).map(([code, label]) => [label, code]));
+const reverseMaterial = Object.fromEntries(Object.entries(materialLabels).map(([code, label]) => [label, code]));
+const reverseWorkstream = Object.fromEntries(Object.entries(workstreamLabels).map(([code, label]) => [label, code]));
 
 function routeFromLocation() {
   const route = window.location.hash.replace(/^#\/?/, "");
   return routes.has(route) ? route : "database";
 }
 
+function initialCatalogState() {
+  const params = new URLSearchParams(window.location.search);
+  const pageSize = [20, 50].includes(Number(params.get("limit"))) ? Number(params.get("limit")) : 20;
+  return {
+    query: params.get("query") || "",
+    page: Math.max(1, Number(params.get("page")) || 1),
+    pageSize,
+    filters: {
+      project: params.get("project") || defaultFilters.project,
+      materialState: params.get("material_state") || defaultFilters.materialState,
+      modality: params.get("modality") || defaultFilters.modality,
+      dateFrom: params.get("date_from") || "",
+      dateTo: params.get("date_to") || "",
+      format: params.get("extension") || defaultFilters.format,
+    },
+  };
+}
+
+function filterCode(value, allValue, reverse) {
+  if (!value || value === allValue) return undefined;
+  return reverse[value] || value;
+}
+
 export function App() {
+  const initialRef = useRef(null);
+  if (initialRef.current === null) initialRef.current = initialCatalogState();
+  const initial = initialRef.current;
   const [activePage, setActivePage] = useState(routeFromLocation);
-  const [datasets, setDatasets] = useState(seedDatasets);
-  const [summary, setSummary] = useState(seedSummary);
-  const [options, setOptions] = useState(seedFilterOptions);
-  const [jobs, setJobs] = useState(seedJobs);
-  const [rules, setRules] = useState(seedRules);
-  const [config, setConfig] = useState(seedConfig);
+  const [catalog, setCatalog] = useState({ items: [], total: 0, loading: true, error: "" });
+  const [summary, setSummary] = useState(emptySummary);
+  const [options, setOptions] = useState(emptyOptions);
+  const [jobs, setJobs] = useState([]);
+  const [rules, setRules] = useState([]);
+  const [config, setConfig] = useState(emptyConfig);
   const [source, setSource] = useState("loading");
-  const [partialFallback, setPartialFallback] = useState(false);
-  const [query, setQuery] = useState("");
-  const deferredQuery = useDeferredValue(query.trim().toLowerCase());
-  const [filters, setFilters] = useState(defaultFilters);
-  const [selectedId, setSelectedId] = useState("PBT-20240513-IMPACT-007");
+  const [partialFailure, setPartialFailure] = useState(false);
+  const [query, setQuery] = useState(initial.query);
+  const deferredQuery = useDeferredValue(query.trim());
+  const [filters, setFilters] = useState(initial.filters);
+  const [page, setPage] = useState(initial.page);
+  const [pageSize, setPageSize] = useState(initial.pageSize);
+  const [retryKey, setRetryKey] = useState(0);
+  const [selectedId, setSelectedId] = useState("");
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [dialog, setDialog] = useState(null);
+  const [pendingAction, setPendingAction] = useState("");
   const [toast, setToast] = useState("");
   const searchRef = useRef(null);
   const toastTimer = useRef(null);
+  const datasets = catalog.items;
 
   const announce = useCallback((message) => {
     window.clearTimeout(toastTimer.current);
     setToast(message);
-    toastTimer.current = window.setTimeout(() => setToast(""), 2600);
+    toastTimer.current = window.setTimeout(() => setToast(""), 3200);
   }, []);
 
   useEffect(() => {
     let active = true;
     loadWorkspace().then((workspace) => {
       if (!active) return;
-      setDatasets(workspace.datasets);
       setSummary(workspace.summary);
       setOptions(workspace.filters);
       setJobs(workspace.jobs);
       setRules(workspace.rules);
       setConfig(workspace.config);
-      setSource(workspace.source);
-      setPartialFallback(workspace.partialFallback);
-      const initial = routeFromLocation() === "review"
-        ? workspace.datasets.find((item) => item.statusCode === "review" || item.statusCode === "deferred")
-        : workspace.datasets[0];
-      setSelectedId(initial?.id || workspace.datasets[0]?.id || "");
+      setPartialFailure(workspace.partialFailure);
     });
     return () => {
       active = false;
@@ -101,8 +123,57 @@ export function App() {
     };
   }, []);
 
+  const catalogParams = useMemo(() => ({
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+    sort: "updated_at",
+    order: "desc",
+    query: deferredQuery || undefined,
+    status: activePage === "review" ? "REVIEW" : undefined,
+    workstream: filterCode(filters.project, "全部项目", reverseWorkstream),
+    material_state: filterCode(filters.materialState, "全部", reverseMaterial),
+    modality: filterCode(filters.modality, "全部", reverseModality),
+    extension: filters.format === "全部" ? undefined : filters.format,
+    date_from: filters.dateFrom || undefined,
+    date_to: filters.dateTo || undefined,
+  }), [activePage, deferredQuery, filters, page, pageSize]);
+
   useEffect(() => {
-    const onHashChange = () => setActivePage(routeFromLocation());
+    const controller = new AbortController();
+    setCatalog((current) => ({ ...current, loading: true, error: "" }));
+    loadCatalogPage(catalogParams, { signal: controller.signal }).then((result) => {
+      setCatalog({ ...result, loading: false, error: "" });
+      setSource("api");
+      setSelectedId((current) => result.items.some((item) => item.id === current) ? current : (result.items[0]?.id || ""));
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      setCatalog({ items: [], total: 0, loading: false, error: error.message || "无法连接本地数据库" });
+      setSelectedId("");
+      setSource("offline");
+    });
+    return () => controller.abort();
+  }, [catalogParams, retryKey]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set("query", query.trim());
+    if (page !== 1) params.set("page", String(page));
+    if (pageSize !== 20) params.set("limit", String(pageSize));
+    if (filters.project !== defaultFilters.project) params.set("project", filters.project);
+    if (filters.materialState !== defaultFilters.materialState) params.set("material_state", filters.materialState);
+    if (filters.modality !== defaultFilters.modality) params.set("modality", filters.modality);
+    if (filters.dateFrom) params.set("date_from", filters.dateFrom);
+    if (filters.dateTo) params.set("date_to", filters.dateTo);
+    if (filters.format !== defaultFilters.format) params.set("extension", filters.format);
+    const next = window.location.pathname + (params.size ? "?" + params.toString() : "") + window.location.hash;
+    window.history.replaceState(null, "", next);
+  }, [filters, page, pageSize, query]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      setActivePage(routeFromLocation());
+      setPage(1);
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
@@ -123,7 +194,7 @@ export function App() {
   }, [dialog]);
 
   const selectedDataset = useMemo(
-    () => datasets.find((item) => item.id === selectedId) || datasets[0] || null,
+    () => datasets.find((item) => item.id === selectedId) || null,
     [datasets, selectedId],
   );
 
@@ -132,43 +203,18 @@ export function App() {
     let active = true;
     loadDatasetDetail(selectedId).then((detail) => {
       if (!active) return;
-      setDatasets((current) => current.map((item) => item.id === selectedId ? { ...item, ...detail } : item));
+      setCatalog((current) => ({ ...current, items: current.items.map((item) => item.id === selectedId ? { ...item, ...detail } : item) }));
     }).catch(() => undefined);
     return () => { active = false; };
   }, [selectedId, source]);
 
-  const visibleRows = useMemo(() => {
-    const search = deferredQuery;
-    return datasets.filter((item) => {
-      if (search) {
-        const haystack = [item.name, item.project, item.sample, item.modalityLabel, item.originalPath, item.sha256]
-          .join(" ")
-          .toLowerCase();
-        if (!haystack.includes(search)) return false;
-      }
-      if (filters.project !== "全部项目" && item.project !== filters.project) return false;
-      if (filters.materialState !== "全部" && item.materialState !== filters.materialState) return false;
-      if (filters.modality !== "全部" && item.modalityLabel !== filters.modality) return false;
-      if (filters.format !== "全部" && item.format !== filters.format) return false;
-      if (filters.dateFrom && item.date < filters.dateFrom) return false;
-      if (filters.dateTo && item.date > filters.dateTo) return false;
-      return true;
-    });
-  }, [datasets, deferredQuery, filters]);
-
-  const navigate = useCallback((page) => {
-    if (!routes.has(page)) return;
-    window.location.hash = "/" + page;
-    setActivePage(page);
-    if (page === "database") {
-      setSelectedId(datasets[0]?.id || "");
-      setInspectorOpen(true);
-    } else if (page === "review") {
-      const firstReview = datasets.find((item) => item.statusCode === "review" || item.statusCode === "deferred");
-      setSelectedId(firstReview?.id || "");
-      setInspectorOpen(true);
-    }
-  }, [datasets]);
+  const navigate = useCallback((nextPage) => {
+    if (!routes.has(nextPage)) return;
+    window.location.hash = "/" + nextPage;
+    setActivePage(nextPage);
+    setPage(1);
+    setInspectorOpen(nextPage === "database" || nextPage === "review");
+  }, []);
 
   const selectDataset = useCallback((id) => {
     setSelectedId(id);
@@ -176,148 +222,155 @@ export function App() {
   }, []);
 
   const mutateDataset = useCallback((id, changes) => {
-    setDatasets((current) => current.map((item) => item.id === id ? { ...item, ...changes } : item));
+    setCatalog((current) => ({ ...current, items: current.items.map((item) => item.id === id ? { ...item, ...changes } : item) }));
+  }, []);
+
+  const refreshSummary = useCallback(async () => {
+    try { setSummary(await loadSummary()); } catch { setPartialFailure(true); }
   }, []);
 
   const accept = useCallback(async (id) => {
-    const item = datasets.find((dataset) => dataset.id === id);
-    if (!item || item.statusCode === "ingested") {
-      announce("该数据集已经入库");
-      return;
+    if (source !== "api") return announce("后端离线，未执行接受操作");
+    setPendingAction("accept:" + id);
+    try {
+      const saved = await acceptDataset(id);
+      mutateDataset(id, saved);
+      await refreshSummary();
+      setInspectorOpen(false);
+      announce("分类已接受，受管副本校验完成");
+    } catch (error) {
+      announce("接受失败：" + error.message);
+    } finally {
+      setPendingAction("");
     }
-    mutateDataset(id, { status: "已入库", statusCode: "ingested" });
-    setSummary((current) => ({ ...current, review: Math.max(0, Number(current.review || 0) - 1), ingestedThisMonth: Number(current.ingestedThisMonth || 0) + 1 }));
-    setInspectorOpen(false);
-    announce("分类已接受，数据集进入校验与入库队列");
-    if (source === "api") acceptDataset(id).catch(() => announce("本地界面已更新，但后端提交失败，请稍后重试"));
-  }, [announce, datasets, mutateDataset, source]);
+  }, [announce, mutateDataset, refreshSummary, source]);
 
-  const defer = useCallback((id) => {
-    mutateDataset(id, { status: "暂缓", statusCode: "deferred" });
-    setInspectorOpen(false);
-    announce("已暂缓处理，数据和建议均保持不变");
-    if (source === "api") deferDataset(id).catch(() => announce("暂缓状态未同步到后端，请稍后重试"));
-  }, [announce, mutateDataset, source]);
+  const defer = useCallback(async (id) => {
+    if (source !== "api") return announce("后端离线，未执行暂缓操作");
+    setPendingAction("defer:" + id);
+    try {
+      const saved = await deferDataset(id);
+      mutateDataset(id, saved);
+      await refreshSummary();
+      setInspectorOpen(false);
+      announce("已暂缓处理，数据和建议均保持不变");
+    } catch (error) {
+      announce("暂缓失败：" + error.message);
+    } finally {
+      setPendingAction("");
+    }
+  }, [announce, mutateDataset, refreshSummary, source]);
 
-  const saveDatasetEdit = useCallback((draft) => {
-    const changes = {
-      canonicalName: draft.canonicalName,
-      modality: draft.modality,
-      modalityLabel: modalityLabels[draft.modality] || draft.modality,
-      project: draft.project,
-      workstream: draft.workstream,
-      materialStateCode: draft.materialStateCode,
-      materialState: materialLabels[draft.materialStateCode] || "未知",
-      sample: draft.sample,
-    };
-    mutateDataset(draft.id, changes);
-    setDialog(null);
-    announce("分类建议已更新，原始文件保持不变");
-    if (source === "api") updateDataset(draft.id, { ...draft, ...changes }).catch(() => announce("修改未同步到后端，请稍后重试"));
+  const saveDatasetEdit = useCallback(async (draft) => {
+    if (source !== "api") return announce("后端离线，修改未保存");
+    setPendingAction("edit:" + draft.id);
+    try {
+      const saved = await updateDataset(draft.id, draft);
+      mutateDataset(draft.id, saved);
+      setDialog(null);
+      announce("分类建议已保存，原始文件保持不变");
+    } catch (error) {
+      announce("修改失败：" + error.message);
+    } finally {
+      setPendingAction("");
+    }
   }, [announce, mutateDataset, source]);
 
   const runScan = useCallback(async (scanSource) => {
-    if (source === "api") {
-      const result = await startScan(scanSource);
-      const job = result?.job || result;
-      if (job?.id) setJobs((current) => [job, ...current]);
-      return { ...job, review: job?.review || 3 };
-    }
-    return { detected: scanSource === "inbox" ? 18 : 822, review: scanSource === "inbox" ? 3 : 37 };
+    if (source !== "api") throw new Error("后端离线");
+    const job = await startScan(scanSource);
+    if (job?.id) setJobs((current) => [job, ...current]);
+    return job;
   }, [source]);
 
   const toggleRule = useCallback(async (id) => {
     const currentRule = rules.find((rule) => rule.id === id);
-    if (!currentRule || currentRule.source !== "user") {
-      announce("内置规则不可停用或修改");
-      return;
-    }
-    const nextEnabled = !currentRule.enabled;
-    setRules((current) => current.map((rule) => rule.id === id ? { ...rule, enabled: nextEnabled } : rule));
-    if (source !== "api") {
-      announce("用户规则状态已更新");
-      return;
-    }
+    if (!currentRule || currentRule.source !== "user") return announce("内置规则不可停用或修改");
+    if (source !== "api") return announce("后端离线，规则未修改");
     try {
-      const saved = await patchRule(id, { enabled: nextEnabled });
+      const saved = await patchRule(id, { enabled: !currentRule.enabled });
       setRules((current) => current.map((rule) => rule.id === id ? { ...rule, ...saved } : rule));
       announce("用户规则状态已保存");
     } catch (error) {
-      setRules((current) => current.map((rule) => rule.id === id ? { ...rule, enabled: currentRule.enabled } : rule));
       announce("规则更新失败：" + error.message);
     }
   }, [announce, rules, source]);
 
   const addRule = useCallback(async (draft) => {
-    const temporaryId = "rule-local-" + Date.now();
-    const optimisticRule = {
-      ...draft,
-      id: temporaryId,
-      description: "Python regex：" + draft.pattern,
-      scope: modalityLabels[draft.label] || draft.label,
-      version: "v1",
-      source: "user",
-      matches: null,
-    };
-    setRules((current) => [optimisticRule, ...current]);
-    setDialog(null);
-    if (source !== "api") {
-      announce("用户规则已创建，将在下一次扫描时生效");
-      return;
-    }
+    if (source !== "api") return announce("后端离线，规则未创建");
     try {
       const saved = await createRule(draft);
-      setRules((current) => current.map((rule) => rule.id === temporaryId ? saved : rule));
+      setRules((current) => [saved, ...current]);
+      setDialog(null);
       announce("用户规则已保存，将在下一次扫描时生效");
     } catch (error) {
-      setRules((current) => current.filter((rule) => rule.id !== temporaryId));
       announce("规则创建失败：" + error.message);
     }
   }, [announce, source]);
 
-  const saveSettings = useCallback((draft) => {
-    setConfig(draft);
-    announce("设置已保存到本地工作站");
-    if (source === "api") saveConfig(draft).catch(() => announce("设置未同步到后端，请稍后重试"));
+  const saveSettings = useCallback(async (draft) => {
+    if (source !== "api") return announce("后端离线，设置未保存");
+    setPendingAction("settings");
+    try {
+      const saved = await saveConfig(draft);
+      setConfig(saved);
+      announce("设置已保存到本地工作站");
+    } catch (error) {
+      announce("设置保存失败：" + error.message);
+    } finally {
+      setPendingAction("");
+    }
   }, [announce, source]);
 
-  let page;
+  const updateFilter = useCallback((field, value) => {
+    setFilters((current) => ({ ...current, [field]: value }));
+    setPage(1);
+  }, []);
+  const updateQuery = useCallback((value) => { setQuery(value); setPage(1); }, []);
+  const resetFilters = useCallback(() => { setFilters(defaultFilters); setPage(1); }, []);
+  const retryCatalog = useCallback(() => setRetryKey((value) => value + 1), []);
+
+  const tableProps = {
+    rows: datasets,
+    total: catalog.total,
+    selectedId,
+    onSelect: selectDataset,
+    page,
+    pageSize,
+    onPageChange: setPage,
+    onPageSizeChange: (size) => { setPageSize(size); setPage(1); },
+    loading: catalog.loading,
+    error: catalog.error,
+    onRetry: retryCatalog,
+  };
+
+  let pageContent;
   if (activePage === "review") {
-    page = <ReviewPage rows={visibleRows} selectedId={selectedId} onSelect={selectDataset} />;
+    pageContent = <ReviewPage {...tableProps} />;
   } else if (activePage === "ingest") {
-    page = <IngestPage jobs={jobs} onImport={() => setDialog("import")} />;
+    pageContent = <IngestPage jobs={jobs} onImport={() => setDialog("import")} />;
   } else if (activePage === "rules") {
-    page = <RulesPage rules={rules} onToggle={toggleRule} onAdd={() => setDialog("rule")} />;
+    pageContent = <RulesPage rules={rules} onToggle={toggleRule} onAdd={() => setDialog("rule")} />;
   } else if (activePage === "settings") {
-    page = <SettingsPage config={config} onSave={saveSettings} />;
+    pageContent = <SettingsPage config={config} onSave={saveSettings} saving={pendingAction === "settings"} />;
   } else {
-    page = (
-      <DatabasePage
-        summary={summary}
-        rows={visibleRows}
-        total={visibleRows.length}
-        selectedId={selectedId}
-        onSelect={selectDataset}
-        filters={filters}
-        options={options}
-        onFilter={(field, value) => setFilters((current) => ({ ...current, [field]: value }))}
-        onReset={() => setFilters(defaultFilters)}
-      />
-    );
+    pageContent = <DatabasePage summary={summary} {...tableProps} filters={filters} options={options} onFilter={updateFilter} onReset={resetFilters} />;
   }
 
   const showInspector = activePage === "database" || activePage === "review";
+  const actionsDisabled = source !== "api" || Boolean(pendingAction);
   return (
     <>
       <AppShell
         activePage={activePage}
         onNavigate={navigate}
         query={query}
-        onQuery={setQuery}
+        onQuery={updateQuery}
         searchRef={searchRef}
         source={source}
-        partialFallback={partialFallback}
+        partialFailure={partialFailure}
         onImport={() => setDialog("import")}
+        importDisabled={source !== "api"}
         inspectorOpen={inspectorOpen}
         onCloseInspector={() => setInspectorOpen(false)}
         toast={toast}
@@ -329,13 +382,14 @@ export function App() {
             onEdit={() => setDialog("edit")}
             onDefer={defer}
             onToast={announce}
+            actionsDisabled={actionsDisabled}
           />
         ) : null}
       >
-        {page}
+        {pageContent}
       </AppShell>
       {dialog === "import" ? <ImportDialog onClose={() => setDialog(null)} onStartScan={runScan} /> : null}
-      {dialog === "edit" ? <EditDatasetDialog dataset={selectedDataset} onClose={() => setDialog(null)} onSave={saveDatasetEdit} /> : null}
+      {dialog === "edit" ? <EditDatasetDialog dataset={selectedDataset} onClose={() => setDialog(null)} onSave={saveDatasetEdit} saving={pendingAction.startsWith("edit:")} /> : null}
       {dialog === "rule" ? <NewRuleDialog onClose={() => setDialog(null)} onSave={addRule} /> : null}
     </>
   );

@@ -8,6 +8,7 @@ import pytest
 from backend.config import Settings
 from backend.database import Database
 from backend.ingestion import accept_dataset
+from backend.paths import PathLocationError, RootMapper
 from backend.scanner import scan_source
 
 
@@ -54,6 +55,9 @@ def test_database_uses_delete_journal_and_queries_catalog(tmp_path: Path) -> Non
     assert listing["total"] == 1
     assert listing["items"][0]["file_count"] == 1
     assert database.get_dataset(dataset_id)["assets"][0]["sha256"] == "a" * 64
+    assert database.get_dataset(dataset_id)["library_id"] == database.library_id()
+    assert database.get_dataset(dataset_id)["assets"][0]["original_root_key"] == "reference"
+    assert database.get_dataset(dataset_id)["assets"][0]["original_relpath"] == "a1.tif"
     assert database.summary()["total_bytes"] == 42
     assert database.filters()["modalities"] == ["SEM"]
 
@@ -329,3 +333,23 @@ def test_configured_roots_cannot_overlap(tmp_path: Path) -> None:
             catalog_path=tmp_path / "inbox" / "catalog.sqlite3",
             model_path=tmp_path / "model.joblib",
         )
+
+
+def test_root_mapper_rejects_traversal_and_symlink_escape(tmp_path: Path) -> None:
+    inbox = tmp_path / "inbox"
+    outside = tmp_path / "outside"
+    inbox.mkdir()
+    outside.mkdir()
+    (outside / "secret.dat").write_bytes(b"outside")
+    mapper = RootMapper({"inbox": inbox})
+
+    with pytest.raises(PathLocationError, match="may not contain"):
+        mapper.resolve("inbox", "../outside/secret.dat")
+
+    link = inbox / "escape"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("Windows symlink creation is not available for this test user")
+    with pytest.raises(PathLocationError, match="escapes root"):
+        mapper.resolve("inbox", "escape/secret.dat", must_exist=True)
