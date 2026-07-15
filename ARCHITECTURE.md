@@ -41,6 +41,24 @@ explicit retry or abstention policy. A deterministic fake provider supplies
 the same contract for queue, recovery and API tests. Rules-only operation does
 not depend on constructing a provider.
 
+## Durable AI state
+
+Local AI work uses three catalog tables. `model_registry` is an immutable
+identity snapshot whose deterministic id includes the model/runtime/prompt
+versions and public inference configuration; credential-shaped configuration
+keys are rejected. `ai_tasks` owns queue priority, bounded attempts, retry
+time, worker lease and terminal state. A partial unique index permits only one
+active task per dataset and input fingerprint. `ai_runs` records every attempt,
+model identity, request/response fingerprints, latency, validated result or a
+sanitized typed error.
+
+Claims run under `BEGIN IMMEDIATE`, so concurrent workers cannot take the same
+task. An expired lease marks its unfinished run failed before the task is made
+eligible for a later attempt. Completion also checks lease ownership, which
+prevents a replaced worker from overwriting a newer result. Unknown model
+outputs are persisted as `ABSTAINED`; AI output never changes dataset metadata
+or grants filesystem authority directly.
+
 ## Canonical taxonomy
 
 - workstream: `REFERENCE`, `PA_ADR_RECYCLE`, `D_PA`, `UDC`, `UNKNOWN`
@@ -57,6 +75,9 @@ not depend on constructing a provider.
 - assets: physical files belonging to a dataset;
 - classification decisions: prediction, confidence, evidence and resolution;
 - ingest jobs: scan and commit progress;
+- model registry: immutable local model and inference configuration identity;
+- AI tasks: durable queue, retry budget and worker lease;
+- AI runs: append-only attempt outcomes and evidence-bearing suggestions;
 - operation log: append-only filesystem and catalog mutations;
 - categories: stable codes and user-facing labels.
 

@@ -158,6 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         configured.ensure_runtime_directories()
         database.initialize()
         database.recover_interrupted_jobs()
+        database.recover_ai_tasks()
         application.state.model_loaded = _configure_local_model(configured)
         application.state.monitor_loop = asyncio.get_running_loop()
         application.state.monitor_wakeup = asyncio.Event()
@@ -228,8 +229,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with request.app.state.config_lock:
             previous = _settings(request)
             current_database = _database(request)
-            if current_database.active_job_count():
-                raise HTTPException(status_code=409, detail="Wait for active scan/accept jobs before changing configuration")
+            if current_database.active_job_count() or current_database.active_ai_task_count():
+                raise HTTPException(
+                    status_code=409,
+                    detail="Wait for active scan/accept/AI jobs before changing configuration",
+                )
             raw = payload.model_dump(exclude_none=True)
             for ui_name, setting_name in {
                 "referencePath": "reference_root",
@@ -268,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             replacement = _database_for(updated)
             replacement.initialize()
             replacement.recover_interrupted_jobs()
+            replacement.recover_ai_tasks()
             from . import classifier
 
             previous_model_bundle = classifier._MODEL_BUNDLE
