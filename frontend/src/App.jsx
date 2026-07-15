@@ -2,6 +2,7 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } f
 import { DatabasePage, SelectionBar } from "./Catalog.jsx";
 import { EditDatasetDialog, ExportDialog, ImportDialog, NewRuleDialog } from "./Dialogs.jsx";
 import { Inspector } from "./Inspector.jsx";
+import { ExportsPage } from "./ExportsPage.jsx";
 import { AppShell } from "./Shell.jsx";
 import { IngestPage, ReviewPage, RulesPage, SettingsPage } from "./SecondaryPages.jsx";
 import {
@@ -18,7 +19,7 @@ import {
   updateDataset,
 } from "./api.js";
 
-const routes = new Set(["database", "review", "ingest", "rules", "settings"]);
+const routes = new Set(["database", "review", "ingest", "exports", "rules", "settings"]);
 const defaultFilters = {
   project: "全部项目",
   materialState: "全部",
@@ -476,6 +477,8 @@ export function App() {
     pageContent = <ReviewPage {...tableProps} />;
   } else if (activePage === "ingest") {
     pageContent = <IngestPage jobs={jobs} onImport={() => setDialog("import")} />;
+  } else if (activePage === "exports") {
+    pageContent = <ExportsPage />;
   } else if (activePage === "rules") {
     pageContent = <RulesPage rules={rules} onToggle={toggleRule} onAdd={() => setDialog("rule")} />;
   } else if (activePage === "settings") {

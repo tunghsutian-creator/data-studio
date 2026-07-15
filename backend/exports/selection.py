@@ -159,6 +159,62 @@ def create_collection(database: Database, name: str, purpose: str | None = None)
     return item
 
 
+def create_collection_from_selection(
+    database: Database,
+    name: str,
+    purpose: str | None,
+    selection_token: str,
+) -> dict[str, Any]:
+    collection_id = str(uuid.uuid4())
+    clean_name = _clean_text(name, "collection name", 200)
+    clean_purpose = _clean_text(purpose, "collection purpose", 2000, nullable=True)
+    token = _clean_text(selection_token, "selection token", 200)
+    assert token is not None
+    if len(token) < 32:
+        raise ValueError("selection token is too short")
+    token_sha256 = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = _utc_now()
+    try:
+        with database.transaction() as connection:
+            library_id = database.library_id(connection)
+            snapshot = connection.execute(
+                "SELECT * FROM selection_snapshots WHERE token_sha256=? AND library_id=?",
+                (token_sha256, library_id),
+            ).fetchone()
+            if snapshot is None:
+                raise ValueError("selection token is invalid")
+            if str(snapshot["status"]) != "READY":
+                raise ValueError("selection snapshot is not ready to save")
+            if str(snapshot["expires_at"]) <= now:
+                raise ValueError("selection token has expired")
+            items = connection.execute(
+                "SELECT asset_id,position FROM selection_snapshot_items WHERE selection_id=? ORDER BY position,asset_id",
+                (snapshot["id"],),
+            ).fetchall()
+            if len(items) != int(snapshot["asset_count"]):
+                raise ValueError("selection snapshot item count is inconsistent")
+            connection.execute(
+                """
+                INSERT INTO collections(id,library_id,name,purpose,created_at,updated_at)
+                VALUES(?,?,?,?,?,?)
+                """,
+                (collection_id, library_id, clean_name, clean_purpose, now, now),
+            )
+            connection.executemany(
+                "INSERT INTO collection_items(collection_id,asset_id,position,added_at) VALUES(?,?,?,?)",
+                ((collection_id, str(item["asset_id"]), int(item["position"]), now) for item in items),
+            )
+    except sqlite3.IntegrityError as exc:
+        if "collections.library_id, collections.name" in str(exc):
+            raise ValueError("a collection with this name already exists") from exc
+        if "FOREIGN KEY constraint failed" in str(exc):
+            raise ValueError("selection contains assets that no longer exist") from exc
+        raise
+    item = get_collection(database, collection_id)
+    assert item is not None
+    return item
+
+
 def list_collections(database: Database) -> list[dict[str, Any]]:
     with database.connect() as connection:
         rows = connection.execute(
@@ -682,6 +738,7 @@ __all__ = [
     "SelectionChanged",
     "add_collection_items",
     "create_collection",
+    "create_collection_from_selection",
     "get_collection",
     "list_collections",
     "preview_selection",

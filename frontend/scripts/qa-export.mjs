@@ -41,6 +41,8 @@ const consoleErrors = [];
 const failedRequests = [];
 const previewRequests = [];
 let createRequest = null;
+let collectionRequest = null;
+let savedCollection = null;
 let exportPolls = 0;
 
 page.on("console", (message) => {
@@ -93,6 +95,14 @@ await page.route("**/api/**", async (route) => {
     });
   }
 
+  if (path === "/api/collections" && request.method() === "POST") {
+    collectionRequest = request.postDataJSON();
+    savedCollection = { id: "collection-qa-1", name: collectionRequest.name, purpose: collectionRequest.purpose, asset_count: 2, total_bytes: 2048, revision: 1, created_at: "2026-07-15T10:00:00Z", updated_at: "2026-07-15T10:00:00Z" };
+    return json(savedCollection, 201);
+  }
+
+  if (path === "/api/collections" && request.method() === "GET") return json({ items: savedCollection ? [savedCollection] : [], total: savedCollection ? 1 : 0 });
+
   if (path === "/api/exports" && request.method() === "POST") {
     createRequest = request.postDataJSON();
     return json({ id: "export-qa-1", status: "QUEUED", archive_path: null, error_detail: null }, 202);
@@ -107,6 +117,11 @@ await page.route("**/api/**", async (route) => {
       archive_path: completed ? "C:\\qa-only\\exports\\Academic-Vault-QA" : null,
       error_detail: null,
     });
+  }
+
+  if (path === "/api/exports" && request.method() === "GET") {
+    const item = createRequest ? { id: "export-qa-1", name: createRequest.name, status: "COMPLETED", archive_path: "C:\\qa-only\\exports\\Academic-Vault-QA", error_detail: null, export_mode: createRequest.export_mode, duplicate_policy: createRequest.duplicate_policy, file_count: 2, total_bytes: 2048, created_at: "2026-07-15T10:00:00Z", finished_at: "2026-07-15T10:01:00Z" } : null;
+    return json({ items: item ? [item] : [], total: item ? 1 : 0 });
   }
 
   return json({});
@@ -129,12 +144,32 @@ try {
   assert(JSON.stringify(previewRequests[0]) === JSON.stringify({ dataset_ids: ["dataset-01"], asset_ids: ["asset-21"] }), "preview should preserve the exact mixed dataset and asset IDs");
   assert(!(await page.getByRole("dialog").innerText()).includes("qa-selection-token"), "selection token must not be rendered");
 
+  await page.getByRole("button", { name: "保存为集合" }).click();
+  await page.getByText(/集合已保存：/).waitFor();
+  assert(collectionRequest?.selection_token?.startsWith("qa-selection-token-"), "collection should be saved from the opaque server snapshot token");
+  assert(!Object.keys(collectionRequest || {}).some((key) => key.includes("path") || key.includes("root")), "collection request must not submit a path or root");
+
   await page.getByRole("button", { name: "开始导出" }).click();
   await page.getByText("导出与校验已完成").waitFor({ timeout: 5000 });
   assert(createRequest?.selection_token?.startsWith("qa-selection-token-"), "export should use the opaque preview token");
+  assert(createRequest?.collection_id === "collection-qa-1", "export should retain its saved collection identity");
   assert(!Object.keys(createRequest || {}).some((key) => key.includes("path") || key.includes("root")), "browser must not submit an output path or root");
   await page.getByRole("button", { name: "完成" }).click();
   await page.getByRole("button", { name: "清空" }).click();
+
+  await page.getByRole("button", { name: "集合与导出" }).click();
+  await page.getByRole("heading", { name: "集合与导出" }).waitFor();
+  await page.locator(".collection-card").waitFor();
+  await page.locator(".export-history-row").waitFor();
+  assert(await page.locator(".collection-card").count() === 1, "saved collection should appear in durable history");
+  assert(await page.locator(".export-history-row").count() === 1, "completed export should appear in durable history");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(150);
+  const historyHorizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  assert(!historyHorizontalOverflow, "mobile collection and export history should not create document-level horizontal overflow");
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await page.getByRole("button", { name: "数据库" }).click();
+  await page.getByRole("heading", { name: "数据库概览" }).waitFor();
 
   await page.getByRole("button", { name: "第 1 页" }).click();
   await page.getByRole("button", { name: "选择当前筛选全部结果" }).click();
@@ -166,6 +201,7 @@ try {
     duplicatePolicy: createRequest.duplicate_policy,
     exportPolls,
     horizontalOverflow,
+    historyHorizontalOverflow,
     consoleErrors,
     failedRequests,
   }, null, 2));

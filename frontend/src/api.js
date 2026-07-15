@@ -339,3 +339,20 @@ export async function createExport(payload) {
 export async function loadExport(id, { signal } = {}) {
   return request("/exports/" + encodeURIComponent(id), { signal });
 }
+
+export async function loadExports({ signal, limit = 100 } = {}) {
+  const payload = await request("/exports?limit=" + encodeURIComponent(limit), { signal });
+  return getPayloadItems(payload);
+}
+
+export async function loadCollections({ signal } = {}) {
+  const payload = await request("/collections", { signal });
+  return getPayloadItems(payload);
+}
+
+export async function createCollection(payload) {
+  return request("/collections", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}

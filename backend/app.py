@@ -614,8 +614,15 @@ def create_app(
 
     @app.post("/api/collections", status_code=201)
     def create_named_collection(payload: CollectionCreate, request: Request) -> dict[str, Any]:
-        from .exports import create_collection
+        from .exports import create_collection, create_collection_from_selection
 
+        if payload.selection_token:
+            return create_collection_from_selection(
+                _database(request),
+                payload.name,
+                payload.purpose,
+                payload.selection_token,
+            )
         return create_collection(_database(request), payload.name, payload.purpose)
 
     @app.get("/api/collections")

@@ -104,6 +104,7 @@ class CollectionCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     purpose: str | None = Field(default=None, max_length=2000)
+    selection_token: str | None = Field(default=None, min_length=32, max_length=200)
 
 
 class CollectionUpdate(BaseModel):

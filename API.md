@@ -38,7 +38,10 @@ All endpoints are served from `http://127.0.0.1:8765/api`.
   accepts a path or model endpoint.
 - `POST /collections`, `PATCH /collections/{id}`,
   `POST /collections/{id}/items` and
-  `DELETE /collections/{id}/items/{asset_id}` manage ordered asset UUIDs.
+  `DELETE /collections/{id}/items/{asset_id}` manage ordered asset UUIDs. A
+  create request may include a ready `selection_token` to save the complete
+  immutable preview atomically without sending paths or re-expanding in the
+  browser.
 - `POST /exports/preview` expands explicit `asset_ids` and/or `dataset_ids`, or
   one normalized server-side filter, into an immutable selection snapshot.
   Explicit IDs may be mixed and are de-duplicated after dataset expansion;

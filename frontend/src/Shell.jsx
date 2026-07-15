@@ -6,6 +6,7 @@ import {
   GearSix,
   ListChecks,
   MagnifyingGlass,
+  Package,
   UploadSimple,
   UserCircle,
 } from "@phosphor-icons/react";
@@ -14,6 +15,7 @@ const navigation = [
   { id: "database", label: "数据库", icon: Database },
   { id: "review", label: "待审核", icon: CheckSquare },
   { id: "ingest", label: "入库记录", icon: ClockCounterClockwise },
+  { id: "exports", label: "集合与导出", icon: Package },
   { id: "rules", label: "分类规则", icon: ListChecks },
   { id: "settings", label: "设置", icon: GearSix },
 ];

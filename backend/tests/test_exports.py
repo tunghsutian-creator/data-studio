@@ -134,6 +134,49 @@ def test_collection_api_is_library_scoped_ordered_and_path_free(tmp_path: Path) 
         assert "original_path" not in serialized
         assert "managed_path" not in serialized
 
+        preview = client.post(
+            "/api/exports/preview",
+            json={"asset_ids": [second, first]},
+        ).json()
+        from_snapshot = client.post(
+            "/api/collections",
+            json={
+                "name": "Snapshot collection",
+                "purpose": "Frozen browser selection",
+                "selection_token": preview["selection_token"],
+            },
+        )
+        assert from_snapshot.status_code == 201
+        snapshot_collection = from_snapshot.json()
+        assert [item["asset_id"] for item in snapshot_collection["items"]] == [second, first]
+        assert preview["selection_token"] not in json.dumps(snapshot_collection)
+
+        invalid_snapshot = client.post(
+            "/api/collections",
+            json={"name": "Invalid snapshot", "selection_token": "x" * 40},
+        )
+        assert invalid_snapshot.status_code == 400
+
+        _, removed_asset = _add_asset(
+            database,
+            settings,
+            "removed/asset.dat",
+            b"removed after preview",
+            group_key="removed-after-preview",
+        )
+        removed_preview = client.post(
+            "/api/exports/preview",
+            json={"asset_ids": [removed_asset]},
+        ).json()
+        with database.transaction() as connection:
+            connection.execute("DELETE FROM assets WHERE id=?", (removed_asset,))
+        removed_snapshot = client.post(
+            "/api/collections",
+            json={"name": "Removed snapshot", "selection_token": removed_preview["selection_token"]},
+        )
+        assert removed_snapshot.status_code == 400
+        assert "no longer exist" in removed_snapshot.json()["detail"]
+
 
 def test_preview_preserves_duplicates_and_collisions_without_persisting_token(tmp_path: Path) -> None:
     settings = _settings(tmp_path)

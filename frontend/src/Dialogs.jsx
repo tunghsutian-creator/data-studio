@@ -12,7 +12,7 @@ import {
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
-import { createExport, loadExport, previewExport } from "./api.js";
+import { createCollection, createExport, loadExport, previewExport } from "./api.js";
 
 function DialogFrame({ title, description, onClose, children, footer, wide = false }) {
   return (
@@ -149,6 +149,8 @@ export function ExportDialog({ selection, onClose, onStarted }) {
   const [previewError, setPreviewError] = useState("");
   const [previewing, setPreviewing] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [savingCollection, setSavingCollection] = useState(false);
+  const [collection, setCollection] = useState(null);
   const [job, setJob] = useState(null);
   const [name, setName] = useState(() => "Academic-Vault-" + new Date().toISOString().slice(0, 10));
   const [purpose, setPurpose] = useState("");
@@ -203,6 +205,7 @@ export function ExportDialog({ selection, onClose, onStarted }) {
         purpose: purpose.trim() || null,
         export_mode: mode,
         duplicate_policy: duplicatePolicy,
+        ...(collection?.id ? { collection_id: collection.id } : {}),
       });
       setJob(created);
       onStarted?.(created);
@@ -213,11 +216,29 @@ export function ExportDialog({ selection, onClose, onStarted }) {
     }
   }
 
+  async function saveCollection() {
+    if (!preview?.ready || !name.trim() || savingCollection || collection) return;
+    setSavingCollection(true);
+    try {
+      const saved = await createCollection({
+        name: name.trim(),
+        purpose: purpose.trim() || null,
+        selection_token: preview.selection_token,
+      });
+      setCollection(saved);
+      setPreviewError("");
+    } catch (error) {
+      setPreviewError(error.message || "无法保存命名集合");
+    } finally {
+      setSavingCollection(false);
+    }
+  }
+
   const terminal = job && ["COMPLETED", "FAILED", "CANCELLED"].includes(job.status);
   const footer = job ? (
     <button className="button button-primary" type="button" onClick={onClose}>{terminal ? "完成" : "关闭并在后台继续"}</button>
   ) : (
-    <><button className="button button-secondary" type="button" disabled={submitting} onClick={onClose}>取消</button><button className="button button-primary" type="button" disabled={previewing || !preview?.ready || !name.trim() || submitting} onClick={submit}>{submitting ? <SpinnerGap className="spin" size={18} /> : <Archive size={18} />}{submitting ? "正在创建" : "开始导出"}</button></>
+    <><button className="button button-secondary" type="button" disabled={submitting || savingCollection} onClick={onClose}>取消</button><button className="button button-secondary" type="button" disabled={previewing || !preview?.ready || !name.trim() || submitting || savingCollection || Boolean(collection)} onClick={saveCollection}>{savingCollection ? <SpinnerGap className="spin" size={18} /> : collection ? <CheckCircle size={18} weight="fill" /> : <Database size={18} />}{savingCollection ? "正在保存" : collection ? "集合已保存" : "保存为集合"}</button><button className="button button-primary" type="button" disabled={previewing || !preview?.ready || !name.trim() || submitting || savingCollection} onClick={submit}>{submitting ? <SpinnerGap className="spin" size={18} /> : <Archive size={18} />}{submitting ? "正在创建" : "开始导出"}</button></>
   );
 
   return (
@@ -237,10 +258,11 @@ export function ExportDialog({ selection, onClose, onStarted }) {
           </div>
           {Object.keys(preview.issues?.counts || {}).length ? <ul className="export-issues">{Object.entries(preview.issues.counts).map(([code, count]) => <li className={preview.issues?.blocking_codes?.includes(code) ? "is-blocking" : ""} key={code}><span>{issueLabels[code] || code}</span><strong>{count}</strong></li>)}</ul> : null}
           {!job ? <div className="export-form-grid">
-            <label className="form-field full"><span>导出名称</span><input autoFocus value={name} maxLength="200" onChange={(event) => setName(event.target.value)} /></label>
+            <label className="form-field full"><span>导出名称</span><input autoFocus value={name} maxLength="200" disabled={Boolean(collection)} onChange={(event) => setName(event.target.value)} /></label>
             <label className="form-field"><span>输出模式</span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="FOLDER">Folder bundle（推荐）</option><option value="ZIP64">ZIP64</option><option value="MANIFEST_ONLY">仅 manifest</option></select></label>
             <label className="form-field"><span>重复内容</span><select value={duplicatePolicy} onChange={(event) => setDuplicatePolicy(event.target.value)}><option value="PRESERVE">保留每个明确选择</option><option value="DEDUPLICATE">物理去重，清单保留</option></select></label>
-            <label className="form-field full"><span>用途（可选）</span><textarea rows="2" value={purpose} maxLength="2000" onChange={(event) => setPurpose(event.target.value)} placeholder="例如：Paper A / Figure 3 的可复现输入" /></label>
+            <label className="form-field full"><span>用途（可选）</span><textarea rows="2" value={purpose} maxLength="2000" disabled={Boolean(collection)} onChange={(event) => setPurpose(event.target.value)} placeholder="例如：Paper A / Figure 3 的可复现输入" /></label>
+            {collection ? <p className="collection-saved full"><CheckCircle size={16} weight="fill" />集合已保存：{collection.name}（{collection.asset_count} 个文件）</p> : null}
           </div> : null}
         </>
       ) : null}
