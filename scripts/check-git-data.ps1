@@ -27,7 +27,7 @@ $forbiddenExtensions = @(
 )
 $imageExtensions = @(".png", ".jpg", ".jpeg", ".webp")
 $allowedImagePrefixes = @("design/", "frontend/public/")
-$forbiddenNames = @("candidate-audit.json", "blind-review.csv")
+$forbiddenNames = @("candidate-audit.json", "blind-review.csv", "soak-report.json")
 $maximumBytes = 5MB
 
 $paths = @()

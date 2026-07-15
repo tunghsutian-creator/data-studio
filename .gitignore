@@ -25,6 +25,7 @@ config.json
 /gold-set-results/
 candidate-audit.json
 blind-review.csv
+soak-report.json
 *.sqlite
 *.sqlite-*
 *.sqlite3

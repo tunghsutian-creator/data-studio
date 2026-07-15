@@ -29,7 +29,11 @@ def api_settings(tmp_path: Path) -> Settings:
     )
 
 
-def fake_ai_worker_factory(providers: list[FakeLocalModelProvider]):
+def fake_ai_worker_factory(
+    providers: list[FakeLocalModelProvider],
+    *,
+    available: bool = True,
+):
     classification = AIClassification.model_validate(
         {
             "modality": "SEM",
@@ -50,6 +54,7 @@ def fake_ai_worker_factory(providers: list[FakeLocalModelProvider]):
         profile = LocalModelProfile.load(settings.ai_profile_path)
         provider = FakeLocalModelProvider(
             classification,
+            available=available,
             identity=ProviderIdentity(
                 provider="fake",
                 profile_id="api-test-q8",
@@ -309,6 +314,42 @@ def test_reference_scan_never_automatically_queues_ai(tmp_path: Path) -> None:
         scan = client.post("/api/scan", json={"source": "reference"})
         assert scan.status_code == 202
         assert client.get("/api/ai/tasks").json()["items"] == []
+
+
+def test_offline_model_does_not_block_inbox_scan_or_change_dataset(tmp_path: Path) -> None:
+    settings = replace(
+        api_settings(tmp_path),
+        ai_enabled=True,
+        ai_worker_poll_seconds=0.1,
+    )
+    settings.inbox_root.mkdir(parents=True)
+    (settings.inbox_root / "ambiguous.txt").write_text("unknown\n", encoding="utf-8")
+    providers: list[FakeLocalModelProvider] = []
+
+    with TestClient(
+        create_app(
+            settings,
+            ai_worker_factory=fake_ai_worker_factory(providers, available=False),
+        )
+    ) as client:
+        scan = client.post("/api/scan", json={"source": "inbox"})
+        assert scan.status_code == 202
+        assert client.get(f"/api/jobs/{scan.json()['id']}").json()["status"] == "COMPLETED"
+        dataset = client.get("/api/datasets").json()["items"][0]
+
+        task = None
+        for _ in range(100):
+            task = client.get("/api/ai/tasks").json()["items"][0]
+            if task["status"] == "FAILED":
+                break
+            time.sleep(0.01)
+        assert task is not None
+        assert task["status"] == "FAILED"
+        assert task["attempt_count"] == task["max_attempts"] == 2
+        assert task["last_error_code"] == "provider_unavailable"
+        unchanged = client.get(f"/api/datasets/{dataset['id']}").json()
+        assert unchanged["status"] == "REVIEW"
+        assert unchanged["modality"] == "UNKNOWN"
 
 
 def test_ai_service_can_be_enabled_and_disabled_through_config(tmp_path: Path) -> None:

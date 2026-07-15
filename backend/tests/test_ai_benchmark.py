@@ -118,6 +118,9 @@ def test_repository_model_lock_is_strict_and_matches_profile() -> None:
     assert lock.vision_projector.bytes == 752_289_728
     assert lock.runtime.repository == "https://github.com/ggml-org/llama.cpp"
     assert all(item.url.startswith("https://github.com/ggml-org/llama.cpp/") for item in lock.runtime.artifacts)
+    assert lock.runtime.launch_arguments[lock.runtime.launch_arguments.index("--host") + 1] == "127.0.0.1"
+    assert lock.runtime.launch_arguments[lock.runtime.launch_arguments.index("--cors-origins") + 1] == "localhost"
+    assert "--no-cors-credentials" in lock.runtime.launch_arguments
 
 
 class _FakeClient:
