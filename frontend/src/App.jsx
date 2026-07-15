@@ -1,6 +1,6 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { DatabasePage } from "./Catalog.jsx";
-import { EditDatasetDialog, ImportDialog, NewRuleDialog } from "./Dialogs.jsx";
+import { DatabasePage, SelectionBar } from "./Catalog.jsx";
+import { EditDatasetDialog, ExportDialog, ImportDialog, NewRuleDialog } from "./Dialogs.jsx";
 import { Inspector } from "./Inspector.jsx";
 import { AppShell } from "./Shell.jsx";
 import { IngestPage, ReviewPage, RulesPage, SettingsPage } from "./SecondaryPages.jsx";
@@ -96,9 +96,13 @@ export function App() {
   const [dialog, setDialog] = useState(null);
   const [pendingAction, setPendingAction] = useState("");
   const [toast, setToast] = useState("");
+  const [selectedDatasets, setSelectedDatasets] = useState(() => new Map());
+  const [allFilteredSelected, setAllFilteredSelected] = useState(false);
+  const [exportDialogSelection, setExportDialogSelection] = useState(null);
   const searchRef = useRef(null);
   const toastTimer = useRef(null);
   const datasets = catalog.items;
+  const selectedDatasetIds = useMemo(() => new Set(selectedDatasets.keys()), [selectedDatasets]);
 
   const announce = useCallback((message) => {
     window.clearTimeout(toastTimer.current);
@@ -173,6 +177,7 @@ export function App() {
     const onHashChange = () => {
       setActivePage(routeFromLocation());
       setPage(1);
+      setAllFilteredSelected(false);
     };
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -185,7 +190,10 @@ export function App() {
         searchRef.current?.focus();
       }
       if (event.key === "Escape") {
-        if (dialog) setDialog(null);
+        if (dialog) {
+          setDialog(null);
+          if (dialog === "export") setExportDialogSelection(null);
+        }
         else setInspectorOpen(false);
       }
     };
@@ -213,12 +221,49 @@ export function App() {
     window.location.hash = "/" + nextPage;
     setActivePage(nextPage);
     setPage(1);
+    setAllFilteredSelected(false);
     setInspectorOpen(nextPage === "database" || nextPage === "review");
   }, []);
 
   const selectDataset = useCallback((id) => {
     setSelectedId(id);
     setInspectorOpen(true);
+  }, []);
+
+  const toggleDatasetForExport = useCallback((row) => {
+    if (allFilteredSelected) {
+      announce("已选择当前筛选的全部结果；请先清空后再逐项选择");
+      return;
+    }
+    setSelectedDatasets((current) => {
+      const next = new Map(current);
+      if (next.has(row.id)) next.delete(row.id);
+      else next.set(row.id, { fileCount: row.fileCount, sizeBytes: row.sizeBytes });
+      return next;
+    });
+  }, [allFilteredSelected, announce]);
+
+  const toggleCurrentPageForExport = useCallback(() => {
+    if (allFilteredSelected) {
+      setAllFilteredSelected(false);
+      return;
+    }
+    const allOnPage = datasets.length > 0 && datasets.every((row) => selectedDatasetIds.has(row.id));
+    setSelectedDatasets((current) => {
+      const next = new Map(current);
+      datasets.forEach((row) => allOnPage ? next.delete(row.id) : next.set(row.id, { fileCount: row.fileCount, sizeBytes: row.sizeBytes }));
+      return next;
+    });
+  }, [allFilteredSelected, datasets, selectedDatasetIds]);
+
+  const selectCurrentFilterForExport = useCallback(() => {
+    setSelectedDatasets(new Map());
+    setAllFilteredSelected(true);
+  }, []);
+
+  const clearExportSelection = useCallback(() => {
+    setSelectedDatasets(new Map());
+    setAllFilteredSelected(false);
   }, []);
 
   const mutateDataset = useCallback((id, changes) => {
@@ -325,10 +370,44 @@ export function App() {
   const updateFilter = useCallback((field, value) => {
     setFilters((current) => ({ ...current, [field]: value }));
     setPage(1);
+    setAllFilteredSelected(false);
   }, []);
-  const updateQuery = useCallback((value) => { setQuery(value); setPage(1); }, []);
-  const resetFilters = useCallback(() => { setFilters(defaultFilters); setPage(1); }, []);
+  const updateQuery = useCallback((value) => { setQuery(value); setPage(1); setAllFilteredSelected(false); }, []);
+  const resetFilters = useCallback(() => { setFilters(defaultFilters); setPage(1); setAllFilteredSelected(false); }, []);
   const retryCatalog = useCallback(() => setRetryKey((value) => value + 1), []);
+
+  const exportSelection = useMemo(() => {
+    if (allFilteredSelected) {
+      const filter = {
+        search: catalogParams.query,
+        status: catalogParams.status,
+        workstream: catalogParams.workstream,
+        material_state: catalogParams.material_state,
+        modality: catalogParams.modality,
+        extension: catalogParams.extension,
+        date_from: catalogParams.date_from,
+        date_to: catalogParams.date_to,
+      };
+      return { filter: Object.fromEntries(Object.entries(filter).filter(([, value]) => value !== undefined && value !== "")) };
+    }
+    return { dataset_ids: Array.from(selectedDatasets.keys()).sort() };
+  }, [allFilteredSelected, catalogParams, selectedDatasets]);
+
+  const selectedFileCount = useMemo(
+    () => Array.from(selectedDatasets.values()).reduce((total, item) => total + Number(item.fileCount || 0), 0),
+    [selectedDatasets],
+  );
+  const selectedDatasetCount = allFilteredSelected ? catalog.total : selectedDatasets.size;
+
+  const openExportDialog = useCallback(() => {
+    setExportDialogSelection(exportSelection);
+    setDialog("export");
+  }, [exportSelection]);
+
+  const closeExportDialog = useCallback(() => {
+    setDialog(null);
+    setExportDialogSelection(null);
+  }, []);
 
   const tableProps = {
     rows: datasets,
@@ -342,6 +421,11 @@ export function App() {
     loading: catalog.loading,
     error: catalog.error,
     onRetry: retryCatalog,
+    selectedDatasetIds,
+    allFilteredSelected,
+    onToggleDataset: toggleDatasetForExport,
+    onTogglePage: toggleCurrentPageForExport,
+    onSelectFiltered: selectCurrentFilterForExport,
   };
 
   let pageContent;
@@ -388,9 +472,11 @@ export function App() {
       >
         {pageContent}
       </AppShell>
+      {showInspector && selectedDatasetCount > 0 ? <SelectionBar datasetCount={selectedDatasetCount} fileCount={selectedFileCount} allFiltered={allFilteredSelected} onClear={clearExportSelection} onExport={openExportDialog} /> : null}
       {dialog === "import" ? <ImportDialog onClose={() => setDialog(null)} onStartScan={runScan} /> : null}
       {dialog === "edit" ? <EditDatasetDialog dataset={selectedDataset} onClose={() => setDialog(null)} onSave={saveDatasetEdit} saving={pendingAction.startsWith("edit:")} /> : null}
       {dialog === "rule" ? <NewRuleDialog onClose={() => setDialog(null)} onSave={addRule} /> : null}
+      {dialog === "export" && exportDialogSelection ? <ExportDialog selection={exportDialogSelection} onClose={closeExportDialog} onStarted={() => announce("导出任务已创建；关闭窗口后仍会在本地后台继续")} /> : null}
     </>
   );
 }

@@ -31,7 +31,7 @@ const desktop = {
   bodyHasRealStorage: (await page.locator("body").innerText()).includes("2.29 GB"),
   bodyHasRealReviewCount: (await page.locator("body").innerText()).includes("待审核\n2"),
   bodyHasProject: (await page.locator("body").innerText()).includes("D-PA"),
-  selectedVisibleRow: await page.locator("tbody tr.is-selected").count() === 1,
+  selectedVisibleRow: await page.locator("tbody tr.is-active").count() === 1,
   detailHasSha256: (await page.locator(".hash-field > span").innerText()) !== "尚未计算",
   detailHasEvidence: !(await page.locator(".inspector").innerText()).includes("暂无可解释分类证据"),
   horizontalOverflow: await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth),

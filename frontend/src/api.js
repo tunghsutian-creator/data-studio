@@ -142,6 +142,7 @@ export function normalizeDataset(item, index = 0) {
     materialState: humanMaterial(materialState),
     materialStateCode: materialState,
     fileCount: Number(item.asset_count ?? item.file_count ?? assets.length ?? 0),
+    sizeBytes: Number(item.size_bytes ?? 0),
     confidence: confidence > 1 ? confidence / 100 : confidence,
     ...state,
     updatedAt: item.modified_at || item.modified || item.updated_at || "—",
@@ -317,4 +318,23 @@ export async function requestAIAnalysis(id) {
     timeoutMs: 10 * 60 * 1000,
     body: JSON.stringify({ reason: "MANUAL_REQUEST", max_attempts: 2 }),
   });
+}
+
+export async function previewExport(selection) {
+  return request("/exports/preview", {
+    method: "POST",
+    timeoutMs: 10 * 60 * 1000,
+    body: JSON.stringify(selection),
+  });
+}
+
+export async function createExport(payload) {
+  return request("/exports", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function loadExport(id, { signal } = {}) {
+  return request("/exports/" + encodeURIComponent(id), { signal });
 }

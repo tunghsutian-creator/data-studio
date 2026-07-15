@@ -16,8 +16,10 @@ import {
   Gauge,
   ImageSquare,
   Microscope,
+  Package,
   ShieldCheck,
   Square,
+  Trash,
   WaveSine,
   Tray,
 } from "@phosphor-icons/react";
@@ -49,6 +51,8 @@ const modalityIcons = {
   OPTICAL: ImageSquare,
   SIMULATION: FileText,
 };
+
+const EMPTY_SELECTION = new Set();
 
 export function ConfidenceBar({ value, showNumber = true }) {
   const percent = Math.round(Number(value || 0) * 100);
@@ -134,10 +138,17 @@ export function DataTable({
   error = "",
   onRetry = () => undefined,
   compact = false,
+  selectedDatasetIds = EMPTY_SELECTION,
+  allFilteredSelected = false,
+  onToggleDataset = () => undefined,
+  onTogglePage = () => undefined,
+  onSelectFiltered = () => undefined,
 }) {
   const pageCount = Math.max(1, Math.ceil(Number(total || 0) / pageSize));
   const safePage = Math.min(page, pageCount);
   const pageTokens = useMemo(() => paginationTokens(safePage, pageCount), [pageCount, safePage]);
+  const selectedOnPage = rows.filter((row) => selectedDatasetIds.has(row.id)).length;
+  const pageChecked = allFilteredSelected || (rows.length > 0 && selectedOnPage === rows.length);
 
   useEffect(() => {
     if (safePage !== page) onPageChange(safePage);
@@ -149,7 +160,7 @@ export function DataTable({
         <table>
           <thead>
             <tr>
-              <th className="check-column"><Square size={17} aria-label="全选" /></th>
+              <th className="check-column"><button className="selection-checkbox" type="button" aria-label={allFilteredSelected ? "清空当前筛选的全部选择" : pageChecked ? "取消选择当前页" : "选择当前页"} aria-pressed={pageChecked} onClick={onTogglePage}>{pageChecked ? <span className="checked-box"><Check size={12} weight="bold" /></span> : <Square size={17} />}</button></th>
               <th>数据集名称</th>
               <th className="hide-mobile">项目</th>
               <th className="hide-tablet">样品</th>
@@ -163,13 +174,14 @@ export function DataTable({
           <tbody>
             {rows.length ? rows.map((row) => {
               const Icon = modalityIcons[row.modality] || FileText;
-              const selected = row.id === selectedId;
+              const active = row.id === selectedId;
+              const exportSelected = allFilteredSelected || selectedDatasetIds.has(row.id);
               return (
                 <tr
                   key={row.id}
-                  className={selected ? "is-selected" : ""}
+                  className={[active ? "is-active" : "", exportSelected ? "is-export-selected" : ""].filter(Boolean).join(" ")}
                   tabIndex="0"
-                  aria-selected={selected}
+                  aria-selected={active}
                   onClick={() => onSelect(row.id)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
@@ -178,7 +190,7 @@ export function DataTable({
                     }
                   }}
                 >
-                  <td className="check-column">{selected ? <span className="checked-box"><Check size={12} weight="bold" /></span> : <Square size={17} />}</td>
+                  <td className="check-column"><button className="selection-checkbox" type="button" aria-label={(exportSelected ? "取消选择 " : "选择 ") + row.name} aria-pressed={exportSelected} disabled={allFilteredSelected} onClick={(event) => { event.stopPropagation(); onToggleDataset(row); }}>{exportSelected ? <span className="checked-box"><Check size={12} weight="bold" /></span> : <Square size={17} />}</button></td>
                   <td><strong className="dataset-name">{row.name}</strong></td>
                   <td className="hide-mobile">{row.project}</td>
                   <td className="hide-tablet">{row.sample}</td>
@@ -196,7 +208,7 @@ export function DataTable({
         </table>
       </div>
       <footer className="table-footer">
-        <span>共 {Number(total ?? rows.length).toLocaleString("zh-CN")} 条</span>
+        <span className="table-count">共 {Number(total ?? rows.length).toLocaleString("zh-CN")} 条 <button type="button" className="text-button" disabled={!total || allFilteredSelected} onClick={onSelectFiltered}>{allFilteredSelected ? "已选择当前筛选全部结果" : "选择当前筛选全部结果"}</button></span>
         <nav aria-label="数据表分页">
           <button type="button" aria-label="上一页" disabled={safePage === 1 || loading} onClick={() => onPageChange(Math.max(1, safePage - 1))}><CaretLeft size={16} /></button>
           {pageTokens.map((token) => typeof token === "number" ? (
@@ -221,6 +233,17 @@ export function DataTable({
         </nav>
       </footer>
     </section>
+  );
+}
+
+export function SelectionBar({ datasetCount, fileCount, allFiltered, onClear, onExport }) {
+  return (
+    <aside className="selection-bar" aria-live="polite" aria-label="导出选择">
+      <span className="selection-bar-icon"><Package size={21} weight="duotone" /></span>
+      <span><strong>已选择 {Number(datasetCount).toLocaleString("zh-CN")} 个数据集</strong><small>{allFiltered ? "将在服务端按当前筛选生成不可变文件快照" : `当前已知约 ${Number(fileCount).toLocaleString("zh-CN")} 个文件`}</small></span>
+      <button className="button button-secondary" type="button" onClick={onClear}><Trash size={16} />清空</button>
+      <button className="button button-primary" type="button" onClick={onExport}><Package size={17} />预检并导出</button>
+    </aside>
   );
 }
 
