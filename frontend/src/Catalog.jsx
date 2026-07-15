@@ -236,11 +236,14 @@ export function DataTable({
   );
 }
 
-export function SelectionBar({ datasetCount, fileCount, allFiltered, onClear, onExport }) {
+export function SelectionBar({ datasetCount, assetCount, fileCount, allFiltered, onClear, onExport }) {
+  const selectedParts = [];
+  if (datasetCount) selectedParts.push(`${Number(datasetCount).toLocaleString("zh-CN")} 个数据集`);
+  if (assetCount) selectedParts.push(`${Number(assetCount).toLocaleString("zh-CN")} 个文件`);
   return (
     <aside className="selection-bar" aria-live="polite" aria-label="导出选择">
       <span className="selection-bar-icon"><Package size={21} weight="duotone" /></span>
-      <span><strong>已选择 {Number(datasetCount).toLocaleString("zh-CN")} 个数据集</strong><small>{allFiltered ? "将在服务端按当前筛选生成不可变文件快照" : `当前已知约 ${Number(fileCount).toLocaleString("zh-CN")} 个文件`}</small></span>
+      <span><strong>已选择 {selectedParts.join(" + ")}</strong><small>{allFiltered ? "将在服务端按当前筛选生成不可变文件快照" : `当前已知约 ${Number(fileCount).toLocaleString("zh-CN")} 个文件`}</small></span>
       <button className="button button-secondary" type="button" onClick={onClear}><Trash size={16} />清空</button>
       <button className="button button-primary" type="button" onClick={onExport}><Package size={17} />预检并导出</button>
     </aside>

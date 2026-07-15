@@ -203,6 +203,20 @@ def test_preview_preserves_duplicates_and_collisions_without_persisting_token(tm
         assert by_dataset.json()["selection_kind"] == "DATASET_IDS"
         assert [item["asset_id"] for item in by_dataset.json()["items"]] == [first]
 
+        mixed = client.post(
+            "/api/exports/preview",
+            json={"dataset_ids": [dataset_a], "asset_ids": [first, second]},
+        )
+        assert mixed.status_code == 200
+        assert mixed.json()["selection_kind"] == "ASSET_IDS"
+        assert [item["asset_id"] for item in mixed.json()["items"]] == [first, second]
+
+        invalid_mixed_filter = client.post(
+            "/api/exports/preview",
+            json={"asset_ids": [first], "filter": {"modality": "SEM"}},
+        )
+        assert invalid_mixed_filter.status_code == 422
+
 
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),

@@ -142,9 +142,9 @@ class ExportPreviewRequest(BaseModel):
 
     @model_validator(mode="after")
     def exactly_one_selector(self) -> "ExportPreviewRequest":
-        selectors = int(bool(self.asset_ids)) + int(bool(self.dataset_ids)) + int(self.filter is not None)
-        if selectors != 1:
-            raise ValueError("provide exactly one of asset_ids, dataset_ids, or filter")
+        explicit_ids = bool(self.asset_ids or self.dataset_ids)
+        if int(explicit_ids) + int(self.filter is not None) != 1:
+            raise ValueError("provide explicit asset/dataset ids or one filter, but not both")
         if self.excluded_asset_ids and self.filter is None:
             raise ValueError("excluded_asset_ids may only be used with filter selection")
         return self

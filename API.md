@@ -39,9 +39,10 @@ All endpoints are served from `http://127.0.0.1:8765/api`.
 - `POST /collections`, `PATCH /collections/{id}`,
   `POST /collections/{id}/items` and
   `DELETE /collections/{id}/items/{asset_id}` manage ordered asset UUIDs.
-- `POST /exports/preview` expands exactly one of explicit `asset_ids`, explicit
-  `dataset_ids`, or a normalized server-side filter into an immutable selection
-  snapshot. Filter selections may include `excluded_asset_ids`.
+- `POST /exports/preview` expands explicit `asset_ids` and/or `dataset_ids`, or
+  one normalized server-side filter, into an immutable selection snapshot.
+  Explicit IDs may be mixed and are de-duplicated after dataset expansion;
+  filter selections may include `excluded_asset_ids`.
 - `POST /exports` consumes one unexpired, exportable `selection_token`. The body
   also supplies `name`, optional `purpose`/`collection_id`, `export_mode`
   (`FOLDER`, `ZIP64`, or `MANIFEST_ONLY`) and `duplicate_policy` (`PRESERVE` or

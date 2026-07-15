@@ -370,9 +370,9 @@ def _load_selection_rows(
     dataset_ids = _clean_ids(payload.get("dataset_ids") or (), "dataset_ids")
     filters = dict(payload.get("filter") or {}) if payload.get("filter") is not None else None
     excluded = _clean_ids(payload.get("excluded_asset_ids") or (), "excluded_asset_ids")
-    selectors = int(bool(asset_ids)) + int(bool(dataset_ids)) + int(filters is not None)
-    if selectors != 1:
-        raise ValueError("provide exactly one selection source")
+    explicit_ids = bool(asset_ids or dataset_ids)
+    if int(explicit_ids) + int(filters is not None) != 1:
+        raise ValueError("provide explicit asset/dataset ids or one filter, but not both")
     if excluded and filters is None:
         raise ValueError("excluded_asset_ids require filter selection")
 
@@ -381,48 +381,52 @@ def _load_selection_rows(
         try:
             revision = database.catalog_revision(connection)
             library_id = database.library_id(connection)
-            if asset_ids:
-                kind = "ASSET_IDS"
-                placeholders = ",".join("?" for _ in asset_ids)
-                found_rows = connection.execute(
-                    _ASSET_SELECT + f" WHERE a.id IN ({placeholders}) AND d.library_id=?",
-                    (*asset_ids, library_id),
-                ).fetchall()
-                by_id = {str(row["asset_id"]): dict(row) for row in found_rows}
-                missing = [asset_id for asset_id in asset_ids if asset_id not in by_id]
-                if missing:
-                    raise ValueError(f"{len(missing)} asset id(s) do not exist in this library")
-                rows = [by_id[asset_id] for asset_id in asset_ids]
-                normalized = {"asset_ids": asset_ids}
-            elif dataset_ids:
-                kind = "DATASET_IDS"
-                placeholders = ",".join("?" for _ in dataset_ids)
-                existing = {
-                    str(row["id"])
-                    for row in connection.execute(
-                        f"SELECT id FROM datasets WHERE id IN ({placeholders}) AND library_id=?",
+            if explicit_ids:
+                kind = "DATASET_IDS" if dataset_ids and not asset_ids else "ASSET_IDS"
+                rows = []
+                selected_asset_ids: set[str] = set()
+                normalized = {}
+
+                if dataset_ids:
+                    placeholders = ",".join("?" for _ in dataset_ids)
+                    existing = {
+                        str(row["id"])
+                        for row in connection.execute(
+                            f"SELECT id FROM datasets WHERE id IN ({placeholders}) AND library_id=?",
+                            (*dataset_ids, library_id),
+                        ).fetchall()
+                    }
+                    missing = [dataset_id for dataset_id in dataset_ids if dataset_id not in existing]
+                    if missing:
+                        raise ValueError(f"{len(missing)} dataset id(s) do not exist in this library")
+                    found_rows = connection.execute(
+                        _ASSET_SELECT + f" WHERE d.id IN ({placeholders}) AND d.library_id=?",
                         (*dataset_ids, library_id),
                     ).fetchall()
-                }
-                missing = [dataset_id for dataset_id in dataset_ids if dataset_id not in existing]
-                if missing:
-                    raise ValueError(f"{len(missing)} dataset id(s) do not exist in this library")
-                found_rows = connection.execute(
-                    _ASSET_SELECT + f" WHERE d.id IN ({placeholders}) AND d.library_id=?",
-                    (*dataset_ids, library_id),
-                ).fetchall()
-                grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-                for row in found_rows:
-                    grouped[str(row["dataset_id"])].append(dict(row))
-                rows = []
-                for dataset_id in dataset_ids:
-                    rows.extend(
-                        sorted(
+                    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+                    for row in found_rows:
+                        grouped[str(row["dataset_id"])].append(dict(row))
+                    for dataset_id in dataset_ids:
+                        for row in sorted(
                             grouped[dataset_id],
-                            key=lambda row: (str(row["original_name"]).casefold(), str(row["asset_id"])),
-                        )
-                    )
-                normalized = {"dataset_ids": dataset_ids}
+                            key=lambda item: (str(item["original_name"]).casefold(), str(item["asset_id"])),
+                        ):
+                            rows.append(row)
+                            selected_asset_ids.add(str(row["asset_id"]))
+                    normalized["dataset_ids"] = dataset_ids
+
+                if asset_ids:
+                    placeholders = ",".join("?" for _ in asset_ids)
+                    found_rows = connection.execute(
+                        _ASSET_SELECT + f" WHERE a.id IN ({placeholders}) AND d.library_id=?",
+                        (*asset_ids, library_id),
+                    ).fetchall()
+                    by_id = {str(row["asset_id"]): dict(row) for row in found_rows}
+                    missing = [asset_id for asset_id in asset_ids if asset_id not in by_id]
+                    if missing:
+                        raise ValueError(f"{len(missing)} asset id(s) do not exist in this library")
+                    rows.extend(by_id[asset_id] for asset_id in asset_ids if asset_id not in selected_asset_ids)
+                    normalized["asset_ids"] = asset_ids
             else:
                 kind = "FILTER"
                 assert filters is not None

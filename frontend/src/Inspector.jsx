@@ -6,11 +6,14 @@ import {
   FolderOpen,
   Pause,
   PencilSimple,
+  Square,
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { ConfidenceBar, StatusPill } from "./Catalog.jsx";
 import { AIAnalysisPanel } from "./AIAnalysisPanel.jsx";
+
+const EMPTY_SELECTION = new Set();
 
 function CopyButton({ value, label, onToast }) {
   async function copy() {
@@ -28,11 +31,23 @@ function DetailField({ label, value }) {
   return <div className="detail-field"><span>{label}</span><strong>{value || "未识别"}</strong></div>;
 }
 
-export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast, actionsDisabled = false }) {
+export function Inspector({
+  dataset,
+  onClose,
+  onAccept,
+  onEdit,
+  onDefer,
+  onToast,
+  actionsDisabled = false,
+  selectedAssetIds = EMPTY_SELECTION,
+  datasetIncludedInExport = false,
+  onToggleAssetForExport = () => undefined,
+}) {
   if (!dataset) {
     return <div className="inspector-empty"><FileText size={36} /><strong>选择一个数据集</strong><span>查看文件组、分类证据和完整性状态。</span></div>;
   }
-  const files = dataset.files?.length
+  const hasSelectableFiles = Boolean(dataset.files?.length);
+  const files = hasSelectableFiles
     ? dataset.files
     : Array.from({ length: dataset.fileCount || 0 }, (_, index) => ({
         id: dataset.id + "-placeholder-" + index,
@@ -59,7 +74,17 @@ export function Inspector({ dataset, onClose, onAccept, onEdit, onDefer, onToast
           <h2>文件组（{files.length}）</h2>
           <ol>
             {files.map((file, index) => (
-              <li key={file.id || file.name + index}>
+              <li className={datasetIncludedInExport || selectedAssetIds.has(file.id) ? "is-export-selected" : ""} key={file.id || file.name + index}>
+                <button
+                  className="selection-checkbox file-selection-checkbox"
+                  type="button"
+                  aria-label={datasetIncludedInExport ? `数据集选择已包含 ${file.name}` : selectedAssetIds.has(file.id) ? `取消导出 ${file.name}` : `加入导出 ${file.name}`}
+                  aria-pressed={datasetIncludedInExport || selectedAssetIds.has(file.id)}
+                  disabled={!hasSelectableFiles || datasetIncludedInExport}
+                  onClick={() => onToggleAssetForExport(dataset, file)}
+                >
+                  {datasetIncludedInExport || selectedAssetIds.has(file.id) ? <span className="checked-box"><Check size={12} weight="bold" /></span> : <Square size={17} />}
+                </button>
                 <span>{index + 1}<FileText size={15} /></span>
                 <strong title={file.role}>{file.name}</strong>
                 <small>{file.size}</small>

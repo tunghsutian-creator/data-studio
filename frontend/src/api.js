@@ -120,6 +120,7 @@ function normalizeAsset(asset, index, datasetId) {
     id: asset.id || datasetId + "-asset-" + index,
     name: asset.name || asset.filename || "未命名文件",
     size,
+    sizeBytes: bytes,
     role: asset.role || asset.file_role || "关联文件",
   };
 }

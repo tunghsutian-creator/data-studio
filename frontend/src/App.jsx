@@ -97,12 +97,14 @@ export function App() {
   const [pendingAction, setPendingAction] = useState("");
   const [toast, setToast] = useState("");
   const [selectedDatasets, setSelectedDatasets] = useState(() => new Map());
+  const [selectedAssets, setSelectedAssets] = useState(() => new Map());
   const [allFilteredSelected, setAllFilteredSelected] = useState(false);
   const [exportDialogSelection, setExportDialogSelection] = useState(null);
   const searchRef = useRef(null);
   const toastTimer = useRef(null);
   const datasets = catalog.items;
   const selectedDatasetIds = useMemo(() => new Set(selectedDatasets.keys()), [selectedDatasets]);
+  const selectedAssetIds = useMemo(() => new Set(selectedAssets.keys()), [selectedAssets]);
 
   const announce = useCallback((message) => {
     window.clearTimeout(toastTimer.current);
@@ -235,13 +237,23 @@ export function App() {
       announce("已选择当前筛选的全部结果；请先清空后再逐项选择");
       return;
     }
+    const adding = !selectedDatasetIds.has(row.id);
     setSelectedDatasets((current) => {
       const next = new Map(current);
       if (next.has(row.id)) next.delete(row.id);
       else next.set(row.id, { fileCount: row.fileCount, sizeBytes: row.sizeBytes });
       return next;
     });
-  }, [allFilteredSelected, announce]);
+    if (adding) {
+      setSelectedAssets((current) => {
+        const next = new Map(current);
+        for (const [assetId, item] of next) {
+          if (item.datasetId === row.id) next.delete(assetId);
+        }
+        return next;
+      });
+    }
+  }, [allFilteredSelected, announce, selectedDatasetIds]);
 
   const toggleCurrentPageForExport = useCallback(() => {
     if (allFilteredSelected) {
@@ -254,15 +266,40 @@ export function App() {
       datasets.forEach((row) => allOnPage ? next.delete(row.id) : next.set(row.id, { fileCount: row.fileCount, sizeBytes: row.sizeBytes }));
       return next;
     });
+    if (!allOnPage) {
+      const pageDatasetIds = new Set(datasets.map((row) => row.id));
+      setSelectedAssets((current) => {
+        const next = new Map(current);
+        for (const [assetId, item] of next) {
+          if (pageDatasetIds.has(item.datasetId)) next.delete(assetId);
+        }
+        return next;
+      });
+    }
   }, [allFilteredSelected, datasets, selectedDatasetIds]);
+
+  const toggleAssetForExport = useCallback((dataset, asset) => {
+    if (allFilteredSelected || selectedDatasetIds.has(dataset.id)) {
+      announce("该文件已由数据集或筛选选择包含");
+      return;
+    }
+    setSelectedAssets((current) => {
+      const next = new Map(current);
+      if (next.has(asset.id)) next.delete(asset.id);
+      else next.set(asset.id, { datasetId: dataset.id, sizeBytes: asset.sizeBytes });
+      return next;
+    });
+  }, [allFilteredSelected, announce, selectedDatasetIds]);
 
   const selectCurrentFilterForExport = useCallback(() => {
     setSelectedDatasets(new Map());
+    setSelectedAssets(new Map());
     setAllFilteredSelected(true);
   }, []);
 
   const clearExportSelection = useCallback(() => {
     setSelectedDatasets(new Map());
+    setSelectedAssets(new Map());
     setAllFilteredSelected(false);
   }, []);
 
@@ -390,14 +427,20 @@ export function App() {
       };
       return { filter: Object.fromEntries(Object.entries(filter).filter(([, value]) => value !== undefined && value !== "")) };
     }
-    return { dataset_ids: Array.from(selectedDatasets.keys()).sort() };
-  }, [allFilteredSelected, catalogParams, selectedDatasets]);
+    const explicit = {};
+    const datasetIds = Array.from(selectedDatasets.keys()).sort();
+    const assetIds = Array.from(selectedAssets.keys()).sort();
+    if (datasetIds.length) explicit.dataset_ids = datasetIds;
+    if (assetIds.length) explicit.asset_ids = assetIds;
+    return explicit;
+  }, [allFilteredSelected, catalogParams, selectedAssets, selectedDatasets]);
 
   const selectedFileCount = useMemo(
-    () => Array.from(selectedDatasets.values()).reduce((total, item) => total + Number(item.fileCount || 0), 0),
-    [selectedDatasets],
+    () => Array.from(selectedDatasets.values()).reduce((total, item) => total + Number(item.fileCount || 0), 0) + selectedAssets.size,
+    [selectedAssets, selectedDatasets],
   );
   const selectedDatasetCount = allFilteredSelected ? catalog.total : selectedDatasets.size;
+  const selectedAssetCount = selectedAssets.size;
 
   const openExportDialog = useCallback(() => {
     setExportDialogSelection(exportSelection);
@@ -467,12 +510,15 @@ export function App() {
             onDefer={defer}
             onToast={announce}
             actionsDisabled={actionsDisabled}
+            selectedAssetIds={selectedAssetIds}
+            datasetIncludedInExport={allFilteredSelected || selectedDatasetIds.has(selectedDataset?.id)}
+            onToggleAssetForExport={toggleAssetForExport}
           />
         ) : null}
       >
         {pageContent}
       </AppShell>
-      {showInspector && selectedDatasetCount > 0 ? <SelectionBar datasetCount={selectedDatasetCount} fileCount={selectedFileCount} allFiltered={allFilteredSelected} onClear={clearExportSelection} onExport={openExportDialog} /> : null}
+      {showInspector && (selectedDatasetCount > 0 || selectedAssetCount > 0) ? <SelectionBar datasetCount={selectedDatasetCount} assetCount={selectedAssetCount} fileCount={selectedFileCount} allFiltered={allFilteredSelected} onClear={clearExportSelection} onExport={openExportDialog} /> : null}
       {dialog === "import" ? <ImportDialog onClose={() => setDialog(null)} onStartScan={runScan} /> : null}
       {dialog === "edit" ? <EditDatasetDialog dataset={selectedDataset} onClose={() => setDialog(null)} onSave={saveDatasetEdit} saving={pendingAction.startsWith("edit:")} /> : null}
       {dialog === "rule" ? <NewRuleDialog onClose={() => setDialog(null)} onSave={addRule} /> : null}

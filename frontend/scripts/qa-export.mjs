@@ -78,7 +78,7 @@ await page.route("**/api/**", async (route) => {
   if (path === "/api/exports/preview" && request.method() === "POST") {
     const payload = request.postDataJSON();
     previewRequests.push(payload);
-    const assetCount = payload.dataset_ids?.length || records.length;
+    const assetCount = payload.filter ? records.length : (payload.dataset_ids?.length || 0) + (payload.asset_ids?.length || 0);
     return json({
       selection_token: "qa-selection-token-" + "x".repeat(40),
       expires_at: "2099-01-01T00:00:00Z",
@@ -119,14 +119,14 @@ try {
 
   await page.getByRole("button", { name: "选择 QA 数据集 01" }).click();
   await page.getByRole("button", { name: "第 2 页" }).click();
-  await page.getByRole("button", { name: "选择 QA 数据集 21" }).click();
-  await page.getByText("已选择 2 个数据集").waitFor();
+  await page.getByRole("button", { name: "加入导出 sample-21.csv" }).click();
+  await page.getByText("已选择 1 个数据集 + 1 个文件").waitFor();
   assert((await page.locator(".selection-bar").innerText()).includes("约 2 个文件"), "selection metadata should survive pagination");
 
   await page.getByRole("button", { name: "预检并导出" }).click();
   await page.getByText("可以安全导出").waitFor();
   assert(previewRequests.length === 1, "explicit selection should request exactly one preview");
-  assert(JSON.stringify(previewRequests[0]) === JSON.stringify({ dataset_ids: ["dataset-01", "dataset-21"] }), "preview should contain the two exact sorted dataset IDs");
+  assert(JSON.stringify(previewRequests[0]) === JSON.stringify({ dataset_ids: ["dataset-01"], asset_ids: ["asset-21"] }), "preview should preserve the exact mixed dataset and asset IDs");
   assert(!(await page.getByRole("dialog").innerText()).includes("qa-selection-token"), "selection token must not be rendered");
 
   await page.getByRole("button", { name: "开始导出" }).click();
@@ -154,6 +154,7 @@ try {
   const horizontalOverflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
   assert(!horizontalOverflow, "mobile export selection should not create document-level horizontal overflow");
   assert(await page.getByRole("button", { name: "预检并导出" }).isVisible(), "mobile export action should remain accessible");
+  assert(await page.getByRole("button", { name: "清空" }).isVisible(), "mobile selection clear action should remain accessible");
   assert(consoleErrors.length === 0, `browser console errors: ${consoleErrors.join(" | ")}`);
   assert(failedRequests.length === 0, `failed browser requests: ${failedRequests.join(" | ")}`);
 
